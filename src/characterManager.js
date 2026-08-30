@@ -1,6 +1,16 @@
 (function (root) {
   class CharacterManager {
     constructor({ maxCharacters = 15, exitSeconds = 0.4, createCharacter } = {}) {
+      if (typeof createCharacter !== 'function') {
+        throw new TypeError('createCharacter must be a function');
+      }
+      if (!Number.isInteger(maxCharacters) || maxCharacters <= 0) {
+        throw new RangeError('maxCharacters must be a finite positive integer');
+      }
+      if (!Number.isFinite(exitSeconds) || exitSeconds < 0) {
+        throw new RangeError('exitSeconds must be finite and non-negative');
+      }
+
       this.maxCharacters = maxCharacters;
       this.exitSeconds = exitSeconds;
       this.createCharacter = createCharacter;
@@ -17,6 +27,7 @@
 
     enqueue(work) {
       const artworkId = work && work.artworkId;
+      // Artwork schema validation belongs upstream; this API treats a missing ID as duplicate.
       if (!artworkId || this.seenIds.has(artworkId)) return 'duplicate';
 
       this.seenIds.add(artworkId);
@@ -55,12 +66,18 @@
 
       while (this.exitingCharacter) {
         const timeNeeded = Math.max(0, this.exitSeconds - this.exitElapsed);
-        if (remaining < timeNeeded) {
+        const epsilon = Number.EPSILON * 8 * Math.max(
+          remaining,
+          timeNeeded,
+          this.exitSeconds,
+          this.exitElapsed,
+        );
+        if (remaining + epsilon < timeNeeded) {
           this.exitElapsed += remaining;
           return;
         }
 
-        remaining -= timeNeeded;
+        remaining = Math.max(0, remaining - timeNeeded);
         this.renderable.shift();
         this.exitingCharacter = null;
         this.exitElapsed = 0;

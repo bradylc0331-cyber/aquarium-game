@@ -17,6 +17,69 @@ function makeWork(number, speciesId = 'noah') {
   return { artworkId: `art-${number}`, speciesId };
 }
 
+test('constructor 套用預設上限與退場時間，並要求 createCharacter 為函式', () => {
+  const manager = new CharacterManager({ createCharacter: makeCharacter });
+  assert.equal(manager.maxCharacters, 15);
+  assert.equal(manager.exitSeconds, 0.4);
+
+  for (const createCharacter of [undefined, null, 'factory', {}]) {
+    assert.throws(
+      () => new CharacterManager({ createCharacter }),
+      { name: 'TypeError', message: 'createCharacter must be a function' },
+    );
+  }
+});
+
+test('constructor 拒絕非有限正整數的 maxCharacters', () => {
+  for (const maxCharacters of [0, -1, 1.5, NaN, Infinity, -Infinity]) {
+    assert.throws(
+      () => new CharacterManager({ maxCharacters, createCharacter: makeCharacter }),
+      { name: 'RangeError', message: 'maxCharacters must be a finite positive integer' },
+    );
+  }
+});
+
+test('constructor 拒絕負數或非有限的 exitSeconds', () => {
+  for (const exitSeconds of [-0.1, NaN, Infinity, -Infinity]) {
+    assert.throws(
+      () => new CharacterManager({ exitSeconds, createCharacter: makeCharacter }),
+      { name: 'RangeError', message: 'exitSeconds must be finite and non-negative' },
+    );
+  }
+});
+
+test('exitSeconds 為 0 時 update(0) 立即完成所有已排隊退場', () => {
+  const manager = new CharacterManager({
+    maxCharacters: 1,
+    exitSeconds: 0,
+    createCharacter: makeCharacter,
+  });
+  for (let number = 1; number <= 3; number++) manager.enqueue(makeWork(number));
+
+  manager.update(0);
+
+  assert.deepEqual(manager.renderable.map((character) => character.artworkId), ['art-3']);
+  assert.equal(manager.pendingCount, 0);
+});
+
+test('極小但大於 0 的 exitSeconds 不會被 update(0) 當成立即退場', () => {
+  const manager = new CharacterManager({
+    maxCharacters: 1,
+    exitSeconds: Number.EPSILON,
+    createCharacter: makeCharacter,
+  });
+  manager.enqueue(makeWork(1));
+  manager.enqueue(makeWork(2));
+
+  manager.update(0);
+  assert.deepEqual(manager.renderable.map((character) => character.artworkId), ['art-1']);
+  assert.equal(manager.pendingCount, 1);
+
+  manager.update(Number.EPSILON);
+  assert.deepEqual(manager.renderable.map((character) => character.artworkId), ['art-2']);
+  assert.equal(manager.pendingCount, 0);
+});
+
 test('前 15 件作品依 FIFO 順序全部進場，且不超過上限', () => {
   const manager = new CharacterManager({ createCharacter: makeCharacter });
 
@@ -62,6 +125,29 @@ test('單次 update 的剩餘時間會繼續驅動下一個排隊退場', () => 
   manager.update(0.8);
 
   assert.deepEqual(manager.renderable.map((character) => character.artworkId), ['art-3', 'art-4']);
+  assert.equal(manager.pendingCount, 0);
+});
+
+test('八次 0.05 秒更新會精確完成一次 0.4 秒退場', () => {
+  const manager = new CharacterManager({ maxCharacters: 1, createCharacter: makeCharacter });
+  manager.enqueue(makeWork(1));
+  manager.enqueue(makeWork(2));
+
+  for (let count = 0; count < 7; count++) manager.update(0.05);
+  assert.deepEqual(manager.renderable.map((character) => character.artworkId), ['art-1']);
+
+  manager.update(0.05);
+  assert.deepEqual(manager.renderable.map((character) => character.artworkId), ['art-2']);
+  assert.equal(manager.pendingCount, 0);
+});
+
+test('單次 1.2 秒更新會精確完成三次 0.4 秒排隊退場', () => {
+  const manager = new CharacterManager({ maxCharacters: 1, createCharacter: makeCharacter });
+  for (let number = 1; number <= 4; number++) manager.enqueue(makeWork(number));
+
+  manager.update(1.2);
+
+  assert.deepEqual(manager.renderable.map((character) => character.artworkId), ['art-4']);
   assert.equal(manager.pendingCount, 0);
 });
 
