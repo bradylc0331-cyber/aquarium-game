@@ -240,6 +240,47 @@ test('steerCharacter 將位置限制在邊界，沒有安全前進路徑時保�
   assert.ok(blockedResult.x === blocked.x || blockedResult.baseY !== blocked.baseY);
 });
 
+test('steerCharacter 將起始越界位置投影到存在的安全位置', () => {
+  const self = character({ x: -100, baseY: 900 });
+  const area = openArea();
+
+  const result = steerCharacter(self, [self], area, 0.1);
+
+  assert.equal(isSafe(result, [], area), true);
+  assert.ok(result.x >= 30);
+  assert.ok(result.baseY <= area.bottom);
+});
+
+test('steerCharacter 從初始角色重疊狀態做 deterministic 安全分離', () => {
+  const self = character();
+  const neighbor = character({
+    id: 'neighbor',
+    x: self.x,
+    baseY: self.baseY,
+    width: 180,
+    height: 280,
+  });
+  const characters = [self, neighbor];
+  const snapshot = structuredClone(characters);
+
+  const result = steerCharacter(self, characters, openArea(), 0.1);
+
+  assert.equal(isSafe(result, [neighbor], openArea()), true);
+  assert.equal(spacesOverlap(personalSpace(result), personalSpace(neighbor)), false);
+  assert.deepEqual(characters, snapshot);
+});
+
+test('steerCharacter 從初始障礙交疊狀態投影到障礙外的安全位置', () => {
+  const self = character();
+  const obstacle = { x: 200, y: 400, width: 200, height: 300 };
+  const area = openArea({ obstacles: [obstacle] });
+
+  const result = steerCharacter(self, [self], area, 0.1);
+
+  assert.equal(isSafe(result, [], area), true);
+  assert.equal(hitsObstacle(personalSpace(result), obstacle), false);
+});
+
 test('steerCharacter 對 dt、速度與 malformed state fail fast，合法輸出不產生 NaN', () => {
   const valid = character();
   for (const dt of [-1, NaN, Infinity]) {

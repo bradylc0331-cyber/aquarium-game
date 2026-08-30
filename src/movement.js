@@ -249,6 +249,87 @@
     return null;
   }
 
+  function recoveryPathIsClear(anchor, candidate, self, others, area) {
+    const anchorSpace = personalSpace({ ...self, x: anchor.x, baseY: anchor.baseY });
+    const initialCharacters = new Set(
+      others.filter((character) => spacesOverlap(anchorSpace, personalSpace(character))),
+    );
+    const initialObstacles = new Set(
+      area.obstacles.filter((obstacle) => hitsObstacle(anchorSpace, obstacle)),
+    );
+    const distance = Math.hypot(candidate.x - anchor.x, candidate.baseY - anchor.baseY);
+    const dimensions = personalSpace(self);
+    const stepLength = Math.max(1, Math.min(dimensions.radiusX, dimensions.radiusY) * 0.45);
+    const steps = Math.max(1, Math.ceil(distance / stepLength));
+
+    for (let step = 1; step <= steps; step++) {
+      const portion = step / steps;
+      const point = {
+        ...self,
+        x: anchor.x + (candidate.x - anchor.x) * portion,
+        baseY: anchor.baseY + (candidate.baseY - anchor.baseY) * portion,
+      };
+      const space = personalSpace(point);
+      if (others.some((character) => (
+        !initialCharacters.has(character) && spacesOverlap(space, personalSpace(character))
+      ))) return false;
+      if (area.obstacles.some((obstacle) => (
+        !initialObstacles.has(obstacle) && hitsObstacle(space, obstacle)
+      ))) return false;
+    }
+    return true;
+  }
+
+  function recoverSafePosition(self, others, area, dt) {
+    const anchor = clampPosition(self, area);
+    const resultAt = (position) => ({
+      ...self,
+      x: position.x,
+      baseY: position.baseY,
+      vx: dt > 0 ? (position.x - self.x) / dt : 0,
+      vy: dt > 0 ? (position.baseY - self.baseY) / dt : 0,
+    });
+    const anchorCharacter = { ...self, x: anchor.x, baseY: anchor.baseY };
+    if (isSafe(anchorCharacter, others, area)) return resultAt(anchor);
+
+    const dimensions = personalSpace(self);
+    const stepDistance = Math.max(8, Math.min(dimensions.radiusX, dimensions.radiusY) * 0.5);
+    const targetDx = self.targetX - anchor.x;
+    const targetDy = self.targetY - anchor.baseY;
+    const targetLength = Math.hypot(targetDx, targetDy);
+    const diagonal = Math.SQRT1_2;
+    const directions = [];
+    if (targetLength > 0) directions.push([targetDx / targetLength, targetDy / targetLength]);
+    directions.push(
+      [1, 0], [-1, 0], [0, 1], [0, -1],
+      [diagonal, diagonal], [diagonal, -diagonal],
+      [-diagonal, diagonal], [-diagonal, -diagonal],
+    );
+    const areaDiagonal = Math.hypot(area.right - area.left, area.bottom - area.top);
+    const maxRings = Math.min(64, Math.max(1, Math.ceil(areaDiagonal / stepDistance)));
+    const seen = new Set([`${anchor.x},${anchor.baseY}`]);
+
+    for (let ring = 1; ring <= maxRings; ring++) {
+      for (const [directionX, directionY] of directions) {
+        const position = clampPosition({
+          ...self,
+          x: anchor.x + directionX * stepDistance * ring,
+          baseY: anchor.baseY + directionY * stepDistance * ring,
+        }, area);
+        const key = `${position.x},${position.baseY}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const candidate = { ...self, x: position.x, baseY: position.baseY };
+        if (
+          isSafe(candidate, others, area)
+          && recoveryPathIsClear(anchor, candidate, self, others, area)
+        ) return resultAt(position);
+      }
+    }
+
+    return { ...resultAt(anchor), vx: 0, vy: 0, blocked: true };
+  }
+
   function steerCharacter(self, characters, area, dt) {
     personalSpace(self);
     if (!Array.isArray(characters)) throw new TypeError('characters must be an array');
@@ -263,6 +344,7 @@
 
     const others = characters.filter((character) => character !== self);
     for (const character of others) personalSpace(character);
+    if (!isSafe(self, others, area)) return recoverSafePosition(self, others, area, dt);
     if (dt === 0) return { ...self, x: self.x, baseY: self.baseY, vx: 0, vy: 0 };
 
     const dx = self.targetX - self.x;
@@ -317,7 +399,7 @@
       };
     }
 
-    return { ...self, x: self.x, baseY: self.baseY, vx: 0, vy: 0 };
+    return recoverSafePosition(self, others, area, dt);
   }
 
   const api = {
