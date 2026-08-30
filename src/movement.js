@@ -280,14 +280,15 @@
     return true;
   }
 
-  function recoverSafePosition(self, others, area, dt) {
+  function recoverSafePosition(self, others, area) {
     const anchor = clampPosition(self, area);
     const resultAt = (position) => ({
       ...self,
       x: position.x,
       baseY: position.baseY,
-      vx: dt > 0 ? (position.x - self.x) / dt : 0,
-      vy: dt > 0 ? (position.baseY - self.baseY) / dt : 0,
+      vx: 0,
+      vy: 0,
+      blocked: false,
     });
     const anchorCharacter = { ...self, x: anchor.x, baseY: anchor.baseY };
     if (isSafe(anchorCharacter, others, area)) return resultAt(anchor);
@@ -344,13 +345,17 @@
 
     const others = characters.filter((character) => character !== self);
     for (const character of others) personalSpace(character);
-    if (!isSafe(self, others, area)) return recoverSafePosition(self, others, area, dt);
-    if (dt === 0) return { ...self, x: self.x, baseY: self.baseY, vx: 0, vy: 0 };
+    if (!isSafe(self, others, area)) return recoverSafePosition(self, others, area);
+    if (dt === 0) {
+      return { ...self, x: self.x, baseY: self.baseY, vx: 0, vy: 0, blocked: false };
+    }
 
     const dx = self.targetX - self.x;
     const dy = self.targetY - self.baseY;
     const distance = Math.hypot(dx, dy);
-    if (distance === 0) return { ...self, x: self.x, baseY: self.baseY, vx: 0, vy: 0 };
+    if (distance === 0) {
+      return { ...self, x: self.x, baseY: self.baseY, vx: 0, vy: 0, blocked: false };
+    }
 
     const desiredVx = dx / distance * self.cruiseSpeed;
     const desiredVy = dy / distance * self.cruiseSpeed * VERTICAL_SPEED_FACTOR;
@@ -396,10 +401,11 @@
         baseY: position.baseY,
         vx: (position.x - self.x) / dt,
         vy: (position.baseY - self.baseY) / dt,
+        blocked: false,
       };
     }
 
-    return recoverSafePosition(self, others, area, dt);
+    return recoverSafePosition(self, others, area);
   }
 
   const api = {

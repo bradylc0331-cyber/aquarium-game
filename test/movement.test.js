@@ -281,6 +281,31 @@ test('steerCharacter 從初始障礙交疊狀態投影到障礙外的安全位�
   assert.equal(hitsObstacle(personalSpace(result), obstacle), false);
 });
 
+test('steerCharacter 以 Number.MIN_VALUE recovery 時仍回傳有限速度與安全位置', () => {
+  const self = character({ x: -100, baseY: 900 });
+  const area = openArea();
+
+  const result = steerCharacter(self, [self], area, Number.MIN_VALUE);
+
+  assert.ok(['x', 'baseY', 'vx', 'vy'].every((key) => Number.isFinite(result[key])));
+  assert.equal(isSafe(result, [], area), true);
+});
+
+test('blocked 只標記真正無安全點的結果，下一次安全更新會清除 stale marker', () => {
+  const self = character();
+  const fullyBlocked = openArea({
+    obstacles: [{ x: 0, y: 0, width: 1000, height: 800 }],
+  });
+
+  const blockedResult = steerCharacter(self, [self], fullyBlocked, 0.1);
+  assert.equal(blockedResult.blocked, true);
+  assert.equal(isSafe(blockedResult, [], fullyBlocked), false);
+
+  const safeResult = steerCharacter(blockedResult, [blockedResult], openArea(), 0.1);
+  assert.equal(isSafe(safeResult, [], openArea()), true);
+  assert.equal(safeResult.blocked, false);
+});
+
 test('steerCharacter 對 dt、速度與 malformed state fail fast，合法輸出不產生 NaN', () => {
   const valid = character();
   for (const dt of [-1, NaN, Infinity]) {
