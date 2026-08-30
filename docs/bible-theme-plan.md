@@ -4,7 +4,7 @@
 
 `aquarium-game` 這個 repo 現在是一個「小朋友塗色 → 掃描 → 投影進虛擬水族箱」的教會兒童活動網站，
 主題是海洋生物。這份文件是把它**改成聖經主題**的完整規格：聖經人物取代海洋生物、聖經場景
-（用 Gemini 生成美術）取代水族箱。目的是讓 Codex（或任何接手的工程師/agent）不需要跟原作者
+（用 GPT Image 生成美術）取代水族箱。目的是讓 Codex（或任何接手的工程師/agent）不需要跟原作者
 再對話，照這份文件就能動手做。
 
 **Repo**：`https://github.com/bradylc0331-cyber/aquarium-game`（`main` 分支，目前已有可運作的
@@ -35,11 +35,11 @@
    裡放什麼模板」的差異，不是不同的抽象，硬要改名只會讓 `svgRaster.js`／`creature.js`／
    `control.html`／`display.html`／`templates/print.html` 裡一堆 `Species.xxx` 的呼叫全部要跟著
    動，徒增改錯的風險。
-2. `src/scene.js` 的背景畫法（程式畫的海水漸層/珊瑚/海草 → 貼一張 Gemini 生成的聖經場景圖 +
+2. `src/scene.js` 的背景畫法（程式畫的海水漸層/珊瑚/海草 → 貼一張 GPT Image 生成的聖經場景圖 +
    疊加動態特效）。
 3. `display.html` / `control.html` / `templates/print.html` 裡的**文案**（「選生物種類」→
    「選聖經人物」之類）。
-4. 一個新的美術素材：`assets/backgrounds/bible-world.jpg`（Gemini 生成，見下方）。
+4. 一個新的美術素材：`assets/backgrounds/bible-world.jpg`（GPT Image 生成，見下方）。
 
 ## 主題設計決策（原作者未及與需求方確認，先照這個做，之後要換隨時可調）
 
@@ -61,27 +61,33 @@
 - **動作比喻**：海洋生物是「游動」，人物換成「安靜地出現、緩緩走動/飄浮，帶著光暈」——細節
   見下方「動作行為」。
 
-## 美術素材：Gemini 生成場景
+## 美術素材：GPT Image 生成場景
+
+> 原本規劃用 Gemini，需求方後來改指定用 **GPT Image**（OpenAI 的圖片生成模型，需求方稱
+> 「GPT Image 2」；OpenAI API 目前的生圖模型代號是 `gpt-image-1`——實作時如果 OpenAI 已經
+> 推出更新版本的模型代號，以 [OpenAI 官方 Image API 文件](https://platform.openai.com/docs/guides/image-generation)
+> 當下列出的最新型號為準，不用糾結名稱字面）。下面流程整體邏輯跟原本 Gemini 版一樣，
+> 只是生圖的工具跟 API 換掉。
 
 ### 為什麼只需要一張圖，不需要一堆圖層
 
 現有的水族箱背景是純程式畫的（漸層＋程式畫的珊瑚/海草/光束/氣泡）。聖經樂園改成：
 
-1. 用 Gemini 生成**一張**完整的靜態場景插畫（山丘、橄欖樹、遠方城鎮、河流、羊群、天空——
+1. 用 GPT Image 生成**一張**完整的靜態場景插畫（山丘、橄欖樹、遠方城鎮、河流、羊群、天空——
    細節都畫在這張圖裡），當作 `<canvas>` 的滿版背景圖（cover 方式縮放置中，見下方程式片段）。
 2. 動態效果**不是**靠多張圖或影片，是跟水族箱氣泡/光束一樣，在這張靜態圖「上面」疊加程式
    畫的動畫圖層：飄動的雲、掃過的光束、緩緩上升的光點微粒、偶爾飛過的鴿子。這個做法現有
    `src/scene.js` 已經示範過一次（`drawBackground` 的光束、`createBubbles`/`drawBubbles`），
    照抄那個模式改色調跟形狀即可，**不需要额外的影片或多層透明素材，也不需要即時呼叫 AI**。
 
-這樣做的好處：Gemini 只需要出**一張圖**、不需要去背/透明圖層這種對生成式模型來說不穩定的
+這樣做的好處：GPT Image 只需要出**一張圖**、不需要去背/透明圖層這種對生成式模型來說不穩定的
 要求，落地風險最低，效果又跟水族箱那套一致（有做過、有驗證過）。
 
 ### 怎麼拿到這張圖（兩條路，先做 A，B 是加分項）
 
 **A. 手動生成（預設做法，馬上能做，不需要任何 API 金鑰）**
 
-1. 打開 Gemini（gemini.google.com 或 Google AI Studio 的 ImageFX / Nano Banana 生圖功能）。
+1. 打開 ChatGPT（內建 GPT Image 生圖）或 OpenAI 的圖片生成介面。
 2. 貼上面的 prompt（可依實際生成結果微調用詞）：
 
    ```
@@ -97,14 +103,42 @@
 4. 如果想要「雲層可以自己飄」的加強版，可以額外生成一張「只有雲跟天空、其他都不畫」的圖，
    但這是加分項，MVP 不需要，先用程式畫的雲（見下方）就好。
 
-**B. 程式自動呼叫 Gemini API（加分項，之後有 API 金鑰再做）**
+**B. 程式自動呼叫 GPT Image API（加分項，之後有 API 金鑰再做）**
 
-寫一支一次性腳本 `scripts/generate-background.js`（Node，用 `@google/generative-ai` 或
-Gemini 的 Imagen 生圖 API），從環境變數讀 `GEMINI_API_KEY`（**絕對不要把金鑰寫進程式碼或
-commit 進 repo**，用本機 `.env`，並把 `.env` 加進 `.gitignore`），呼叫一次生成上面那個 prompt，
-把結果存到 `assets/backgrounds/bible-world.jpg`。這支腳本只是「產生素材」用的工具，
-不需要在活動當天執行，也不需要在瀏覽器端呼叫（瀏覽器端呼叫會把金鑰曝露在前端程式碼裡，
-公開 repo 絕對不能這樣做）。
+寫一支一次性腳本 `scripts/generate-background.js`（Node，用官方 `openai` npm 套件），
+從環境變數讀 `OPENAI_API_KEY`（**絕對不要把金鑰寫進程式碼或 commit 進 repo**，用本機
+`.env`，並把 `.env` 加進 `.gitignore`），呼叫一次 Images API 生成上面那個 prompt，
+把結果存到 `assets/backgrounds/bible-world.jpg`。範例：
+
+```js
+// scripts/generate-background.js
+import fs from 'node:fs';
+import OpenAI from 'openai';
+
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const prompt = `A warm, gentle children's storybook illustration of a peaceful
+biblical-era landscape at golden hour. Rolling green hills, olive trees, a few
+sheep grazing, a winding river, a small distant hillside town with flat-roofed
+stone houses, soft warm sunlight rays coming through gentle clouds, a calm blue
+sky. Soft watercolor / gouache painting style, warm and inviting, no people, no
+text, no watermark, wide 16:9 landscape composition, suitable for a children's
+church event background.`;
+
+const result = await client.images.generate({
+  model: 'gpt-image-1', // 依 OpenAI 當下文件的最新生圖模型代號調整
+  prompt,
+  size: '1536x1024', // 16:9 系寬幅，實際可用尺寸以 API 文件為準
+});
+
+const base64 = result.data[0].b64_json;
+fs.writeFileSync('assets/backgrounds/bible-world.jpg', Buffer.from(base64, 'base64'));
+console.log('已產生 assets/backgrounds/bible-world.jpg');
+```
+
+這支腳本只是「產生素材」用的工具，不需要在活動當天執行，也**絕對不要在瀏覽器端呼叫**
+（瀏覽器端呼叫會把金鑰曝露在前端程式碼裡，公開 repo 絕對不能這樣做——`control.html`／
+`display.html` 全程都不應該出現任何 API 金鑰或直接呼叫 OpenAI API 的程式碼）。
 
 ### `src/scene.js` 要怎麼改
 
@@ -138,7 +172,7 @@ function drawBackground(ctx, w, h, t) {
 ```
 
 原本 `drawRocksAndCoral` / `drawSeaweed` 這兩個「程式畫地景細節」的函式**直接刪掉、
-`display.html` 也拿掉呼叫**——山丘/橄欖樹/城鎮這些細節已經畫在 Gemini 生成的圖裡了，
+`display.html` 也拿掉呼叫**——山丘/橄欖樹/城鎮這些細節已經畫在 GPT Image 生成的圖裡了，
 程式端不需要再畫一次前景地景。保留：
 
 - `drawBackground`（改成貼圖，如上）
@@ -235,7 +269,7 @@ ctx.scale(flip * off.scaleX, off.scaleY);
 | `display.html` toast | `${emoji} 新的${name}游進來了！` | `${emoji} ${name}來到聖經樂園了！` |
 | `display.html` hint | 按 F11 進入全螢幕投影到電視 | 不變 |
 | `templates/print.html` | 校正墊 / 生物塗色紙 / 把小朋友的塗色紙放在這個框框裡 | 校正墊字樣不變；「生物塗色紙」→「聖經人物塗色紙」；引導框文字可留白不強改 |
-| `SETUP.md` / `README.md` | 提到「海洋生物」「水族箱」的敘述 | 換成「聖經人物」「聖經樂園」，並把美術素材那段換成上面的 Gemini 生成流程 |
+| `SETUP.md` / `README.md` | 提到「海洋生物」「水族箱」的敘述 | 換成「聖經人物」「聖經樂園」，並把美術素材那段換成上面的 GPT Image 生成流程 |
 
 `display.html` 開場的 `DEMO_COLORS`（示範生物預設配色）也要換成 7 個新 id
 （`noah`／`moses`／`david`／`daniel`／`jonah`／`shepherd`／`angel`），配色建議走柔和溫暖色系
@@ -270,7 +304,7 @@ ctx.scale(flip * off.scaleX, off.scaleY);
 8. 修 `test/svgRaster.test.js` 裡的 id，跑 `npm test` 全過。
 9. 瀏覽器煙霧測試 + 截圖確認觀感，尤其確認背景圖 cover 縮放沒有變形、人物線稿與遮罩對得上。
 10. 更新 `README.md`／`SETUP.md` 的主題敘述與美術素材取得步驟。
-11.（加分項）寫 `scripts/generate-background.js`，用 `GEMINI_API_KEY` 環境變數自動生成背景圖，
+11.（加分項）寫 `scripts/generate-background.js`，用 `OPENAI_API_KEY` 環境變數自動生成背景圖，
     金鑰不進 repo。
 
 ## 有疑慮就先照這樣做，之後可以再調的地方
