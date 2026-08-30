@@ -102,6 +102,7 @@
 <script src="src/qrCode.js"></script>
 <script src="src/svgRaster.js"></script>
 <script src="src/extract.js"></script>
+<script src="src/artworkMessage.js"></script>
 <script src="src/channel.js"></script>
 <script src="src/calibrationStore.js"></script>
 <script src="src/autoCapture.js"></script>
@@ -117,7 +118,7 @@
   const maskCache = new Map();   // speciesId -> A4 canonical mask ImageData
   const outlineCache = new Map(); // speciesId -> HTMLCanvasElement（半透明外框，疊在即時預覽上）
   const imageCache = new Map();
-  let lastScanResult = null; // { dataURL, speciesId }
+  let lastScanResult = null; // { artworkId, dataURL, speciesId }
   const autoDetector = new AutoCapture.StableArtworkDetector();
   let autoCaptureBusy = false;
   let previewUpdating = false;
@@ -410,18 +411,26 @@
     rctx.clearRect(0, 0, outW, outH);
     rctx.drawImage(srcCanvas, 0, 0, outW, outH);
 
-    lastScanResult = { dataURL: resultCanvas.toDataURL('image/png'), speciesId: species.id };
+    lastScanResult = {
+      artworkId: ArtworkMessage.createArtworkId(),
+      dataURL: resultCanvas.toDataURL('image/png'),
+      speciesId: species.id,
+    };
     sendBtn.disabled = automatic;
     rescanBtn.disabled = automatic;
     return lastScanResult;
   }
 
-  function sendToScene(species, dataURL, source) {
-    channel.send({ type: 'creature-scanned', speciesId: species.id, textureDataURL: dataURL, ts: Date.now() });
+  function sendToScene(species, scanResult, source) {
+    channel.send(ArtworkMessage.createScannedArtworkMessage({
+      artworkId: scanResult.artworkId,
+      speciesId: species.id,
+      textureDataURL: scanResult.dataURL,
+    }));
     addLog(`${new Date().toLocaleTimeString('zh-TW')} — ${source === 'auto' ? '自動登場' : '手動送出'} ${species.emoji} ${species.name}`);
   }
 
-  function queueAutomaticSubmission(species, dataURL) {
+  function queueAutomaticSubmission(species, scanResult) {
     const delayMs = AutoCapture.randomDelayMs(30, 60);
     const delaySeconds = Math.round(delayMs / 1000);
     pendingAutoCount++;
@@ -429,7 +438,7 @@
     setAutoStatus('ok', `已自動拍攝${species.name}，請拿走作品；約 ${delaySeconds} 秒後登場${pendingSuffix()}`);
     setTimeout(() => {
       pendingAutoCount--;
-      sendToScene(species, dataURL, 'auto');
+      sendToScene(species, scanResult, 'auto');
       if (autoModeToggle.checked && calibration) {
         const next = autoDetector.state === 'waiting-removal' ? '請拿走已拍攝的作品' : '請放入下一張塗色紙';
         setAutoStatus('ok', `${species.name}已登場・${next}${pendingSuffix()}`);
@@ -445,7 +454,7 @@
         setAutoStatus('err', '自動拍攝失敗，請拿走作品後重新放入，或改用手動掃描');
         return;
       }
-      queueAutomaticSubmission(species, result.dataURL);
+      queueAutomaticSubmission(species, result);
       setScanStatus('ok', `已自動拍攝${species.name}並排入等待，請拿走作品`);
     } catch (error) {
       setAutoStatus('err', '自動拍攝失敗：' + error.message);
@@ -567,7 +576,7 @@
   sendBtn.onclick = () => {
     if (!lastScanResult) return;
     const species = Species.getSpecies(lastScanResult.speciesId);
-    sendToScene(species, lastScanResult.dataURL, 'manual');
+    sendToScene(species, lastScanResult, 'manual');
     clearScanResult();
     setScanStatus('ok', '已送到聖經樂園！下一位小朋友可以放紙進去了');
   };
