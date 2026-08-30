@@ -2,8 +2,10 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   createArtworkId,
+  createArtworkScanResult,
   createScannedArtworkMessage,
   isScannedArtworkMessage,
+  submitScannedArtwork,
 } = require('../src/artworkMessage.js');
 
 test('作品 ID 隨拍攝時間改變，掃描訊息保留同一個 ID 與指定時間', () => {
@@ -36,4 +38,85 @@ test('只接受具有效作品 ID、物種、PNG 圖片與有限時間的掃描�
   assert.equal(isScannedArtworkMessage({ ...validMessage, artworkId: undefined }), false);
   assert.equal(isScannedArtworkMessage({ ...validMessage, artworkId: '     ' }), false);
   assert.equal(isScannedArtworkMessage({ ...validMessage, textureDataURL: 'data:image/jpeg;base64,AAAA' }), false);
+});
+
+test('成功拍攝只建立一次作品 ID，並放進完整掃描結果', () => {
+  let createIdCalls = 0;
+  const scanResult = createArtworkScanResult({
+    speciesId: 'noah',
+    dataURL: 'data:image/png;base64,WORK',
+    createId: () => {
+      createIdCalls++;
+      return 'art-capture-a';
+    },
+  });
+
+  assert.equal(createIdCalls, 1);
+  assert.deepEqual(scanResult, {
+    artworkId: 'art-capture-a',
+    speciesId: 'noah',
+    dataURL: 'data:image/png;base64,WORK',
+  });
+});
+
+test('手動提交完整保留掃描結果的 ID、物種與圖片', () => {
+  const sent = [];
+  const scanResult = {
+    artworkId: 'art-manual-a',
+    speciesId: 'moses',
+    dataURL: 'data:image/png;base64,MANUAL',
+  };
+
+  submitScannedArtwork(scanResult, {
+    send: (message) => sent.push(message),
+    now: () => 101,
+  });
+
+  assert.deepEqual(sent, [{
+    type: 'creature-scanned',
+    artworkId: 'art-manual-a',
+    speciesId: 'moses',
+    textureDataURL: 'data:image/png;base64,MANUAL',
+    ts: 101,
+  }]);
+});
+
+test('延遲提交 A 後即使最新掃描變成 B，計時器仍送出 A 的原始內容', () => {
+  let timerCallback = null;
+  let timerDelay = null;
+  const sent = [];
+  const workA = {
+    artworkId: 'art-work-a',
+    speciesId: 'david',
+    dataURL: 'data:image/png;base64,WORK-A',
+  };
+  const workB = {
+    artworkId: 'art-work-b',
+    speciesId: 'daniel',
+    dataURL: 'data:image/png;base64,WORK-B',
+  };
+  let latestScanResult = workA;
+
+  submitScannedArtwork(latestScanResult, {
+    delayMs: 45_000,
+    setTimer: (callback, delayMs) => {
+      timerCallback = callback;
+      timerDelay = delayMs;
+    },
+    send: (message) => sent.push(message),
+    now: () => 202,
+  });
+  latestScanResult = workB;
+
+  assert.equal(timerDelay, 45_000);
+  assert.deepEqual(sent, []);
+  timerCallback();
+  assert.deepEqual(sent, [{
+    type: 'creature-scanned',
+    artworkId: 'art-work-a',
+    speciesId: 'david',
+    textureDataURL: 'data:image/png;base64,WORK-A',
+    ts: 202,
+  }]);
+  assert.equal(latestScanResult, workB);
 });

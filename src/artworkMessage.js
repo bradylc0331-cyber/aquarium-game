@@ -11,6 +11,14 @@
     return `art-${timestamp}-${entropy}`;
   }
 
+  function createArtworkScanResult({ speciesId, dataURL, createId = createArtworkId }) {
+    return {
+      artworkId: createId(),
+      speciesId,
+      dataURL,
+    };
+  }
+
   function createScannedArtworkMessage({ artworkId, speciesId, textureDataURL, now = Date.now }) {
     return {
       type: 'creature-scanned',
@@ -19,6 +27,25 @@
       textureDataURL,
       ts: Number(now()),
     };
+  }
+
+  function submitScannedArtwork(scanResult, {
+    send,
+    now = Date.now,
+    setTimer,
+    delayMs = 0,
+  }) {
+    const message = createScannedArtworkMessage({
+      artworkId: scanResult.artworkId,
+      speciesId: scanResult.speciesId,
+      textureDataURL: scanResult.dataURL,
+      now,
+    });
+    if (typeof setTimer === 'function') {
+      return setTimer(() => send(message), delayMs);
+    }
+    send(message);
+    return message;
   }
 
   function isScannedArtworkMessage(value) {
@@ -37,7 +64,13 @@
     );
   }
 
-  const api = { createArtworkId, createScannedArtworkMessage, isScannedArtworkMessage };
+  const api = {
+    createArtworkId,
+    createArtworkScanResult,
+    createScannedArtworkMessage,
+    isScannedArtworkMessage,
+    submitScannedArtwork,
+  };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.ArtworkMessage = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -411,39 +411,46 @@
     rctx.clearRect(0, 0, outW, outH);
     rctx.drawImage(srcCanvas, 0, 0, outW, outH);
 
-    lastScanResult = {
-      artworkId: ArtworkMessage.createArtworkId(),
-      dataURL: resultCanvas.toDataURL('image/png'),
+    lastScanResult = ArtworkMessage.createArtworkScanResult({
       speciesId: species.id,
-    };
+      dataURL: resultCanvas.toDataURL('image/png'),
+    });
     sendBtn.disabled = automatic;
     rescanBtn.disabled = automatic;
     return lastScanResult;
   }
 
-  function sendToScene(species, scanResult, source) {
-    channel.send(ArtworkMessage.createScannedArtworkMessage({
-      artworkId: scanResult.artworkId,
-      speciesId: species.id,
-      textureDataURL: scanResult.dataURL,
-    }));
+  function sendArtworkMessage(message, source) {
+    channel.send(message);
+    const species = Species.getSpecies(message.speciesId);
     addLog(`${new Date().toLocaleTimeString('zh-TW')} — ${source === 'auto' ? '自動登場' : '手動送出'} ${species.emoji} ${species.name}`);
   }
 
-  function queueAutomaticSubmission(species, scanResult) {
+  function sendToScene(scanResult, source) {
+    ArtworkMessage.submitScannedArtwork(scanResult, {
+      send: (message) => sendArtworkMessage(message, source),
+    });
+  }
+
+  function queueAutomaticSubmission(scanResult) {
+    const species = Species.getSpecies(scanResult.speciesId);
     const delayMs = AutoCapture.randomDelayMs(30, 60);
     const delaySeconds = Math.round(delayMs / 1000);
     pendingAutoCount++;
     addLog(`${new Date().toLocaleTimeString('zh-TW')} — 等待 ${delaySeconds} 秒 ${species.emoji} ${species.name}`);
     setAutoStatus('ok', `已自動拍攝${species.name}，請拿走作品；約 ${delaySeconds} 秒後登場${pendingSuffix()}`);
-    setTimeout(() => {
-      pendingAutoCount--;
-      sendToScene(species, scanResult, 'auto');
-      if (autoModeToggle.checked && calibration) {
-        const next = autoDetector.state === 'waiting-removal' ? '請拿走已拍攝的作品' : '請放入下一張塗色紙';
-        setAutoStatus('ok', `${species.name}已登場・${next}${pendingSuffix()}`);
-      }
-    }, delayMs);
+    ArtworkMessage.submitScannedArtwork(scanResult, {
+      delayMs,
+      setTimer: setTimeout,
+      send: (message) => {
+        pendingAutoCount--;
+        sendArtworkMessage(message, 'auto');
+        if (autoModeToggle.checked && calibration) {
+          const next = autoDetector.state === 'waiting-removal' ? '請拿走已拍攝的作品' : '請放入下一張塗色紙';
+          setAutoStatus('ok', `${species.name}已登場・${next}${pendingSuffix()}`);
+        }
+      },
+    });
   }
 
   async function captureAutomatically(warped, species) {
@@ -454,7 +461,7 @@
         setAutoStatus('err', '自動拍攝失敗，請拿走作品後重新放入，或改用手動掃描');
         return;
       }
-      queueAutomaticSubmission(species, result);
+      queueAutomaticSubmission(result);
       setScanStatus('ok', `已自動拍攝${species.name}並排入等待，請拿走作品`);
     } catch (error) {
       setAutoStatus('err', '自動拍攝失敗：' + error.message);
@@ -575,8 +582,7 @@
 
   sendBtn.onclick = () => {
     if (!lastScanResult) return;
-    const species = Species.getSpecies(lastScanResult.speciesId);
-    sendToScene(species, lastScanResult, 'manual');
+    sendToScene(lastScanResult, 'manual');
     clearScanResult();
     setScanStatus('ok', '已送到聖經樂園！下一位小朋友可以放紙進去了');
   };
