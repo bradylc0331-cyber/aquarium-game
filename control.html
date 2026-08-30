@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>掃描控制台</title>
+<style>
+  :root { color-scheme: light; }
+  body {
+    margin: 0; padding: 16px; background: #eef4fb; min-height: 100vh; box-sizing: border-box;
+    font: 16px/1.5 -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; color: #14213d;
+  }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 1100px; margin: 0 auto; }
+  @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: #fff; border-radius: 14px; padding: 16px; box-shadow: 0 2px 10px rgba(20,33,61,0.08); }
+  .card h2 { font-size: 16px; margin: 0 0 10px; }
+  .species-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .species-btn {
+    display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 4px;
+    border: 2px solid #dbe6f5; border-radius: 12px; background: #f7fafe; cursor: pointer; font-size: 13px;
+  }
+  .species-btn .emoji { font-size: 28px; }
+  .species-btn.selected { border-color: #2f6fed; background: #e7f0ff; }
+  video, canvas.preview { width: 100%; border-radius: 10px; background: #0d1b33; display: block; }
+  button {
+    font: inherit; padding: 10px 16px; border-radius: 10px; border: none; background: #2f6fed; color: #fff;
+    cursor: pointer; margin: 4px 6px 0 0;
+  }
+  button.secondary { background: #dbe6f5; color: #14213d; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .status { font-size: 14px; padding: 8px 10px; border-radius: 8px; background: #f2f6fb; margin-top: 8px; white-space: pre-line; }
+  .status.ok { background: #e5f7ec; color: #15804a; }
+  .status.warn { background: #fdf1de; color: #9a5a10; }
+  .status.err { background: #fde8e8; color: #a3231f; }
+  label { font-size: 13px; color: #46587a; display: block; margin-top: 8px; }
+  select, input[type=range] { width: 100%; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .log { max-height: 160px; overflow-y: auto; font-size: 13px; color: #46587a; }
+</style>
+</head>
+<body>
+<h1>🎨 塗鴉水族館・掃描控制台</h1>
+<div class="grid">
+
+  <div class="card">
+    <h2>① 選生物種類</h2>
+    <div class="species-grid" id="speciesGrid"></div>
+
+    <h2 style="margin-top:16px">② 攝影機</h2>
+    <div class="row">
+      <select id="cameraSelect"></select>
+      <button id="startCameraBtn">開啟攝影機</button>
+    </div>
+    <video id="video" autoplay playsinline muted></video>
+
+    <h2 style="margin-top:16px">③ 校正（活動開始前做一次就好）</h2>
+    <label>偵測門檻（畫面太暗/太亮偵測不到角標時調整） <span id="thresholdVal">90</span></label>
+    <input type="range" id="thresholdSlider" min="40" max="180" value="90" />
+    <div class="row">
+      <button id="calibrateBtn">校正</button>
+      <button id="clearCalibrationBtn" class="secondary">清除校正</button>
+    </div>
+    <div id="calibrationStatus" class="status">尚未校正</div>
+  </div>
+
+  <div class="card">
+    <h2>④ 即時對位預覽</h2>
+    <p style="font-size:13px;color:#46587a;margin:0 0 8px">校正完成後，把塗色紙放進校正墊中間的虛線框，對齊淡淡的生物外框輪廓再按掃描。</p>
+    <canvas id="correctedCanvas" class="preview" width="800" height="600"></canvas>
+    <div class="row" style="margin-top:10px">
+      <button id="scanBtn" disabled>📸 掃描</button>
+    </div>
+    <div id="scanStatus" class="status">先完成校正</div>
+
+    <h2 style="margin-top:16px">掃描結果預覽</h2>
+    <canvas id="resultCanvas" class="preview" style="max-height:220px;object-fit:contain;background:#0d1b33"></canvas>
+    <div class="row">
+      <button id="sendBtn" class="secondary" disabled>✅ 送到水族箱</button>
+      <button id="rescanBtn" class="secondary" disabled>🔁 重新掃描</button>
+    </div>
+
+    <h2 style="margin-top:16px">最近送出</h2>
+    <div id="log" class="log">（還沒有生物送出）</div>
+  </div>
+
+</div>
+
+<script src="src/constants.js"></script>
+<script src="src/homography.js"></script>
+<script src="src/markerDetect.js"></script>
+<script src="src/species.js"></script>
+<script src="src/svgRaster.js"></script>
+<script src="src/extract.js"></script>
+<script src="src/channel.js"></script>
+<script src="src/calibrationStore.js"></script>
+<script>
+(function () {
+  const { CANVAS_W, CANVAS_H, MARKER_CANONICAL } = AquariumConstants;
+  const channel = AquariumChannel.createChannel();
+
+  let selectedSpeciesId = Species.SPECIES[0].id;
+  let mediaStream = null;
+  let calibration = CalibrationStore.loadCalibration();
+  const maskCache = new Map();   // speciesId -> canonical mask ImageData (800x600)
+  const outlineCache = new Map(); // speciesId -> HTMLCanvasElement（半透明外框，疊在即時預覽上）
+  let lastScanResult = null; // { croppedCanvas }
+
+  // ---------- 生物選單 ----------
+  const speciesGrid = document.getElementById('speciesGrid');
+  function renderSpeciesGrid() {
+    speciesGrid.innerHTML = '';
+    for (const sp of Species.SPECIES) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'species-btn' + (sp.id === selectedSpeciesId ? ' selected' : '');
+      btn.innerHTML = `<span class="emoji">${sp.emoji}</span>${sp.name}`;
+      btn.onclick = () => { selectedSpeciesId = sp.id; renderSpeciesGrid(); };
+      speciesGrid.appendChild(btn);
+    }
+  }
+  renderSpeciesGrid();
+
+  // ---------- 遮罩 / 外框快取 ----------
+  async function getCanonicalMask(species) {
+    if (maskCache.has(species.id)) return maskCache.get(species.id);
+    const svg = SvgRaster.canonicalMaskSVG(species);
+    const canvas = await SvgRaster.rasterizeSVGToCanvas(svg, CANVAS_W, CANVAS_H);
+    const data = canvas.getContext('2d').getImageData(0, 0, CANVAS_W, CANVAS_H);
+    maskCache.set(species.id, data);
+    return data;
+  }
+
+  async function getOutlineOverlayCanvas(species) {
+    if (outlineCache.has(species.id)) return outlineCache.get(species.id);
+    const svg = SvgRaster.canonicalOutlineSVG(species);
+    const canvas = await SvgRaster.rasterizeSVGToCanvas(svg, CANVAS_W, CANVAS_H);
+    outlineCache.set(species.id, canvas);
+    return canvas;
+  }
+
+  // ---------- 攝影機 ----------
+  const video = document.getElementById('video');
+  const cameraSelect = document.getElementById('cameraSelect');
+
+  async function refreshCameraList() {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter((d) => d.kind === 'videoinput');
+    cameraSelect.innerHTML = '';
+    cams.forEach((cam, i) => {
+      const opt = document.createElement('option');
+      opt.value = cam.deviceId;
+      opt.textContent = cam.label || `攝影機 ${i + 1}`;
+      cameraSelect.appendChild(opt);
+    });
+  }
+
+  async function startCamera(deviceId) {
+    if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
+    const constraints = { video: deviceId ? { deviceId: { exact: deviceId } } : true, audio: false };
+    mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = mediaStream;
+    await refreshCameraList();
+  }
+
+  document.getElementById('startCameraBtn').onclick = () => {
+    startCamera(cameraSelect.value || undefined).catch((err) => {
+      setCalibrationStatus('err', '打不開攝影機：' + err.message);
+    });
+  };
+  cameraSelect.onchange = () => startCamera(cameraSelect.value);
+
+  function captureVideoFrame() {
+    const w = video.videoWidth, h = video.videoHeight;
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    c.getContext('2d').drawImage(video, 0, 0, w, h);
+    return c.getContext('2d').getImageData(0, 0, w, h);
+  }
+
+  // ---------- 校正 ----------
+  const thresholdSlider = document.getElementById('thresholdSlider');
+  const thresholdVal = document.getElementById('thresholdVal');
+  thresholdSlider.oninput = () => { thresholdVal.textContent = thresholdSlider.value; };
+
+  const calibrationStatusEl = document.getElementById('calibrationStatus');
+  const scanBtn = document.getElementById('scanBtn');
+  const scanStatusEl = document.getElementById('scanStatus');
+
+  function setCalibrationStatus(kind, text) {
+    calibrationStatusEl.className = 'status ' + kind;
+    calibrationStatusEl.textContent = text;
+  }
+  function setScanStatus(kind, text) {
+    scanStatusEl.className = 'status ' + kind;
+    scanStatusEl.textContent = text;
+  }
+
+  function refreshCalibrationUI() {
+    if (calibration) {
+      const t = new Date(calibration.savedAt).toLocaleTimeString('zh-TW');
+      setCalibrationStatus('ok', `已於 ${t} 校正完成，可以開始掃描`);
+      scanBtn.disabled = false;
+      setScanStatus('ok', '準備好了，把塗色紙放進框內後按掃描');
+    } else {
+      setCalibrationStatus('warn', '尚未校正：把校正墊放進畫面、四個角落的黑色方塊都要拍得到，再按「校正」');
+      scanBtn.disabled = true;
+      setScanStatus('warn', '先完成校正才能掃描');
+    }
+  }
+  refreshCalibrationUI();
+
+  document.getElementById('calibrateBtn').onclick = () => {
+    if (!video.videoWidth) { setCalibrationStatus('err', '請先開啟攝影機'); return; }
+    const frame = captureVideoFrame();
+    const threshold = Number(thresholdSlider.value);
+    const corners = MarkerDetect.detectCorners(frame, { threshold });
+    if (!corners) {
+      setCalibrationStatus('err', '四個角落沒有同時偵測到黑色方塊。確認校正墊四角都在畫面內、光線充足，或調整偵測門檻再試一次。');
+      return;
+    }
+    const src = [corners.tl, corners.tr, corners.br, corners.bl];
+    const dst = [MARKER_CANONICAL.tl, MARKER_CANONICAL.tr, MARKER_CANONICAL.br, MARKER_CANONICAL.bl];
+    try {
+      const H = Homography.computeHomography(src, dst);
+      const invH = Homography.invertHomography(H);
+      calibration = CalibrationStore.saveCalibration({ H, invH, corners, cameraLabel: cameraSelect.selectedOptions[0] && cameraSelect.selectedOptions[0].textContent });
+      refreshCalibrationUI();
+    } catch (e) {
+      setCalibrationStatus('err', '校正失敗：四個角點可能太靠近一直線，調整校正墊角度再試一次。');
+    }
+  };
+
+  document.getElementById('clearCalibrationBtn').onclick = () => {
+    CalibrationStore.clearCalibration();
+    calibration = null;
+    refreshCalibrationUI();
+  };
+
+  // ---------- 即時對位預覽 ----------
+  const correctedCanvas = document.getElementById('correctedCanvas');
+  const correctedCtx = correctedCanvas.getContext('2d');
+
+  async function updateCorrectedPreview() {
+    if (!video.videoWidth || !calibration) return;
+    const frame = captureVideoFrame();
+    const warped = Homography.warpPerspectiveImageData(frame, calibration.invH, CANVAS_W, CANVAS_H);
+    correctedCtx.putImageData(warped, 0, 0);
+    const species = Species.getSpecies(selectedSpeciesId);
+    if (species) {
+      const overlay = await getOutlineOverlayCanvas(species);
+      correctedCtx.save();
+      correctedCtx.globalAlpha = 0.55;
+      correctedCtx.drawImage(overlay, 0, 0);
+      correctedCtx.restore();
+    }
+  }
+  setInterval(() => { updateCorrectedPreview().catch(() => {}); }, 140);
+
+  // ---------- 掃描 ----------
+  const resultCanvas = document.getElementById('resultCanvas');
+  const sendBtn = document.getElementById('sendBtn');
+  const rescanBtn = document.getElementById('rescanBtn');
+
+  scanBtn.onclick = async () => {
+    if (!calibration) return;
+    const species = Species.getSpecies(selectedSpeciesId);
+    const frame = captureVideoFrame();
+    const warped = Homography.warpPerspectiveImageData(frame, calibration.invH, CANVAS_W, CANVAS_H);
+    const mask = await getCanonicalMask(species);
+    const merged = Extract.applyMaskToImageData(warped, mask);
+    const box = Extract.boundingBoxOfAlpha(merged, 24);
+    if (!box) {
+      setScanStatus('err', '框內沒有掃到顏色，確認塗色紙有放進虛線框內，再按一次掃描。');
+      return;
+    }
+    const cropped = Extract.cropImageData(merged, box, 6);
+
+    const maxDim = 420;
+    const scale = Math.min(1, maxDim / Math.max(cropped.width, cropped.height));
+    const outW = Math.round(cropped.width * scale), outH = Math.round(cropped.height * scale);
+    const srcCanvas = document.createElement('canvas');
+    srcCanvas.width = cropped.width; srcCanvas.height = cropped.height;
+    srcCanvas.getContext('2d').putImageData(new ImageData(cropped.data, cropped.width, cropped.height), 0, 0);
+
+    resultCanvas.width = outW; resultCanvas.height = outH;
+    const rctx = resultCanvas.getContext('2d');
+    rctx.clearRect(0, 0, outW, outH);
+    rctx.drawImage(srcCanvas, 0, 0, outW, outH);
+
+    lastScanResult = { canvas: resultCanvas, speciesId: species.id };
+    sendBtn.disabled = false;
+    rescanBtn.disabled = false;
+    setScanStatus('ok', `掃到了！確認顏色沒問題就按「送到水族箱」，不滿意就重新掃描。`);
+  };
+
+  rescanBtn.onclick = () => {
+    lastScanResult = null;
+    sendBtn.disabled = true;
+    rescanBtn.disabled = true;
+    resultCanvas.getContext('2d').clearRect(0, 0, resultCanvas.width, resultCanvas.height);
+    setScanStatus('ok', '準備好了，把塗色紙放進框內後按掃描');
+  };
+
+  const logEl = document.getElementById('log');
+  const sentLog = [];
+  sendBtn.onclick = () => {
+    if (!lastScanResult) return;
+    const species = Species.getSpecies(lastScanResult.speciesId);
+    const dataURL = lastScanResult.canvas.toDataURL('image/png');
+    channel.send({ type: 'creature-scanned', speciesId: species.id, textureDataURL: dataURL, ts: Date.now() });
+
+    sentLog.unshift(`${new Date().toLocaleTimeString('zh-TW')} — ${species.emoji} ${species.name}`);
+    logEl.innerHTML = sentLog.slice(0, 20).map((l) => `<div>${l}</div>`).join('');
+
+    lastScanResult = null;
+    sendBtn.disabled = true;
+    rescanBtn.disabled = true;
+    resultCanvas.getContext('2d').clearRect(0, 0, resultCanvas.width, resultCanvas.height);
+    setScanStatus('ok', '已送到水族箱！下一位小朋友可以放紙進去了');
+  };
+
+  // 一開始就試著列出裝置名稱（如果之前已授權過攝影機權限，名稱會直接顯示）
+  navigator.mediaDevices.enumerateDevices().then((devices) => {
+    const cams = devices.filter((d) => d.kind === 'videoinput');
+    cams.forEach((cam, i) => {
+      const opt = document.createElement('option');
+      opt.value = cam.deviceId;
+      opt.textContent = cam.label || `攝影機 ${i + 1}`;
+      cameraSelect.appendChild(opt);
+    });
+  }).catch(() => {});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>虛擬水族箱</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #04184f; overflow: hidden; height: 100%; }
+  canvas { display: block; }
+  #hint {
+    position: fixed; left: 16px; bottom: 12px; color: rgba(255,255,255,0.55);
+    font: 14px/1.4 -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif;
+    pointer-events: none; user-select: none;
+  }
+  #toast {
+    position: fixed; top: 24px; left: 50%; transform: translateX(-50%) translateY(-20px);
+    background: rgba(255,255,255,0.92); color: #0d3b8c; padding: 10px 22px; border-radius: 999px;
+    font: bold 20px/1 -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif;
+    opacity: 0; transition: opacity .3s, transform .3s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+<canvas id="tank"></canvas>
+<div id="toast"></div>
+<div id="hint">按 F11 進入全螢幕投影到電視 · 這個視窗保持開著</div>
+
+<script src="src/constants.js"></script>
+<script src="src/species.js"></script>
+<script src="src/svgRaster.js"></script>
+<script src="src/extract.js"></script>
+<script src="src/creature.js"></script>
+<script src="src/scene.js"></script>
+<script src="src/channel.js"></script>
+<script>
+(function () {
+  const canvas = document.getElementById('tank');
+  const ctx = canvas.getContext('2d');
+  const toast = document.getElementById('toast');
+
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const bubbles = AquariumScene.createBubbles(canvas.width, canvas.height, 40);
+  const creatures = [];
+  const MAX_CREATURES = 40; // 活動跑一整個下午，超過上限就淘汰最舊的，避免無限長
+
+  // 開場先游幾隻預設配色的示範生物，畫面才不會一片空——真的掃描結果進來時一樣加進同一個陣列
+  const DEMO_COLORS = {
+    clownfish: [255, 140, 60], turtle: [90, 170, 110], jellyfish: [230, 190, 230],
+    dolphin: [120, 160, 210], octopus: [200, 110, 170], starfish: [250, 190, 90],
+  };
+
+  function textureFromImageData(imageData) {
+    const c = document.createElement('canvas');
+    c.width = imageData.width; c.height = imageData.height;
+    c.getContext('2d').putImageData(new ImageData(imageData.data, imageData.width, imageData.height), 0, 0);
+    return c;
+  }
+
+  async function makeDemoTexture(species) {
+    const maskSvg = SvgRaster.nativeMaskSVG(species);
+    const [, , vw, vh] = species.viewBox.split(' ').map(Number);
+    const maskCanvas = await SvgRaster.rasterizeSVGToCanvas(maskSvg, vw, vh);
+    const maskData = maskCanvas.getContext('2d').getImageData(0, 0, vw, vh);
+    const color = Extract.solidColorImageData(vw, vh, DEMO_COLORS[species.id] || [200, 200, 200]);
+    const merged = Extract.applyMaskToImageData(color, maskData);
+    const box = Extract.boundingBoxOfAlpha(merged, 20);
+    if (!box) return null;
+    const cropped = Extract.cropImageData(merged, box, 4);
+    return textureFromImageData(cropped);
+  }
+
+  function spawnCreature(speciesId, image) {
+    const species = Species.getSpecies(speciesId);
+    if (!species || !image) return;
+    if (creatures.length >= MAX_CREATURES) creatures.shift();
+    creatures.push(new CreatureModule.Creature({ image, species, canvasWidth: canvas.width, canvasHeight: canvas.height }));
+  }
+
+  async function seedDemoCreatures() {
+    for (const species of Species.SPECIES) {
+      const tex = await makeDemoTexture(species);
+      if (tex) spawnCreature(species.id, tex);
+    }
+  }
+  seedDemoCreatures();
+
+  function showToast(text) {
+    toast.textContent = text;
+    toast.classList.add('show');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => toast.classList.remove('show'), 2600);
+  }
+
+  const channel = AquariumChannel.createChannel();
+  channel.onMessage((msg) => {
+    if (!msg || msg.type !== 'creature-scanned') return;
+    const img = new Image();
+    img.onload = () => {
+      spawnCreature(msg.speciesId, img);
+      const species = Species.getSpecies(msg.speciesId);
+      showToast(`${(species && species.emoji) || '🐟'} 新的${(species && species.name) || '生物'}游進來了！`);
+    };
+    img.src = msg.textureDataURL;
+  });
+
+  let last = performance.now();
+  let elapsed = 0;
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    elapsed += dt;
+
+    AquariumScene.updateBubbles(bubbles, dt, canvas.width, canvas.height);
+
+    AquariumScene.drawBackground(ctx, canvas.width, canvas.height, elapsed);
+    AquariumScene.drawRocksAndCoral(ctx, canvas.width, canvas.height);
+    AquariumScene.drawSeaweed(ctx, canvas.width, canvas.height, elapsed);
+    AquariumScene.drawBubbles(ctx, bubbles);
+
+    for (const c of creatures) {
+      c.update(dt, elapsed);
+      c.draw(ctx, elapsed);
+    }
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
