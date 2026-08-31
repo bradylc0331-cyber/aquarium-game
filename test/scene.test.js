@@ -77,10 +77,60 @@ test('羊群固定六隻、橫向展開，而且每一隻都站在可行走草�
   assert.ok(sortedX[5] - sortedX[0] > 700, '六隻羊必須橫跨大部分草地');
 });
 
+test('羊群工廠使用注入亂數且每隻羊都有完整可行走狀態', () => {
+  const sequence = [0, 0.25, 0.5, 0.75, 1, 0.1, 0.3, 0.6, 0.9, 0.2, 0.4, 0.8];
+  const makeSequenceRandom = () => {
+    let index = 0;
+    return () => sequence[index++];
+  };
+  const firstFlock = createSheepFlock(1000, 1000, makeSequenceRandom());
+  const secondFlock = createSheepFlock(1000, 1000, makeSequenceRandom());
+  const fixedFlock = createSheepFlock(1000, 1000, () => 0);
+
+  assert.deepEqual(firstFlock, secondFlock);
+  assert.notDeepEqual(firstFlock, fixedFlock);
+  for (const sheep of firstFlock) {
+    assert.ok(Number.isFinite(sheep.speed) && sheep.speed >= 8 && sheep.speed <= 16);
+    assert.ok(sheep.mode === 'walking' || sheep.mode === 'grazing');
+    assert.ok(Number.isFinite(sheep.modeTime) && sheep.modeTime > 0);
+    if (sheep.mode === 'grazing') {
+      assert.ok(sheep.modeTime >= 2 && sheep.modeTime <= 5);
+    } else {
+      assert.ok(sheep.modeTime >= 5 && sheep.modeTime <= 11);
+    }
+    assert.ok(sheep.direction === 1 || sheep.direction === -1);
+    assert.ok(Number.isFinite(sheep.width) && sheep.width > 0);
+    assert.ok(Number.isFinite(sheep.height) && sheep.height > 0);
+    assert.ok(Number.isFinite(sheep.phase));
+  }
+  assert.ok(firstFlock.some((sheep) => sheep.direction === 1));
+  assert.ok(firstFlock.some((sheep) => sheep.direction === -1));
+  assert.ok(firstFlock.some((sheep) => sheep.mode === 'grazing'));
+  assert.ok(firstFlock.some((sheep) => sheep.mode === 'walking'));
+  assert.ok(new Set(firstFlock.map((sheep) => sheep.phase)).size > 3);
+});
+
 test('羊越靠近畫面下方越大，而且景深縮放沒有跳階', () => {
   const samples = [600, 650, 700, 750, 800, 850, 900].map((y) => sheepScaleForY(y, 600, 930));
   for (let i = 1; i < samples.length; i++) {
     assert.ok(samples[i] > samples[i - 1]);
     assert.ok(samples[i] - samples[i - 1] < 0.1, '相鄰深度不能突然放大');
+  }
+});
+
+test('羊景深縮放在草地範圍外也會夾住且保持單調', () => {
+  const top = 600;
+  const bottom = 930;
+  const topScale = sheepScaleForY(top, top, bottom);
+  const bottomScale = sheepScaleForY(bottom, top, bottom);
+  assert.equal(sheepScaleForY(top - 100, top, bottom), topScale);
+  assert.equal(sheepScaleForY(bottom + 100, top, bottom), bottomScale);
+
+  let previous = topScale;
+  for (let y = top - 200; y <= bottom + 200; y += 5) {
+    const scale = sheepScaleForY(y, top, bottom);
+    assert.ok(scale >= 0.72 && scale <= 1.05);
+    assert.ok(scale >= previous);
+    previous = scale;
   }
 });
