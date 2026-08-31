@@ -392,9 +392,20 @@
   async function scanWarpedFrame(warped, species, automatic) {
     const mask = await getCanonicalMask(species);
     const merged = Extract.applyMaskToImageData(warped, mask);
-    const box = Extract.boundingBoxOfAlpha(merged, 24);
-    if (!box) return null;
-    const cropped = Extract.cropImageData(merged, box, 6);
+
+    // 品質不合格就直接放棄這一次掃描：不建立作品 ID、不送訊息、不占名額、
+    // 也不會害場上任何一位小朋友的作品被擠掉。請他重新對位再拍一次就好。
+    const quality = Extract.assessExtraction(merged);
+    if (!quality.ok) {
+      const messages = {
+        empty: '沒有辨識到人物，請確認紙有放進鏡頭並重新對位',
+        'too-small': '人物太小或不完整，請讓整張 A4 完整進入鏡頭',
+        'paper-background': '偵測到的是整張白紙而不是人物，請重新對位後再拍',
+      };
+      setScanStatus('err', messages[quality.reason] || '掃描結果無法使用，請重新對位');
+      return null;
+    }
+    const cropped = Extract.cropImageData(merged, quality.box, 6);
 
     const maxDim = 420;
     const scale = Math.min(1, maxDim / Math.max(cropped.width, cropped.height));
@@ -563,11 +574,10 @@
     const species = Species.getSpecies(selectedSpeciesId);
     const frame = captureVideoFrame();
     const warped = Homography.warpPerspectiveImageData(frame, calibration.invH, CANVAS_W, CANVAS_H);
+    // scanWarpedFrame 失敗時已經把「為什麼不能用」寫進狀態列了，
+    // 這裡不要再用一句籠統的訊息蓋掉它。
     const result = await scanWarpedFrame(warped, species, false);
-    if (!result) {
-      setScanStatus('err', '框內沒有掃到顏色，確認塗色紙有放進虛線框內，再按一次掃描。');
-      return;
-    }
+    if (!result) return;
     if (autoModeToggle.checked) {
       autoDetector.markCaptured();
       setAutoStatus('ok', `已使用手動備援拍攝${species.name}，請拿走作品${pendingSuffix()}`);

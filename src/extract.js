@@ -62,7 +62,37 @@
     return { width, height, data };
   }
 
-  const api = { applyMaskToImageData, boundingBoxOfAlpha, cropImageData, solidColorImageData };
+  // 掃描品質判定：在作品進入場景之前先擋下明顯不能用的結果。
+  //
+  // 這一關的意義是「壞掉的掃描不該占名額」——場上滿 15 位時，一張沒對準的紙
+  // 若被當成作品收下，會把某個小朋友的作品擠掉。所以寧可請他重拍一次。
+  function assessExtraction(imageData) {
+    const box = boundingBoxOfAlpha(imageData, 24);
+    if (!box) return { ok: false, reason: 'empty' };
+
+    const canvasArea = imageData.width * imageData.height;
+    const boxArea = box.width * box.height;
+
+    // 幾乎鋪滿整張畫布 = 遮罩沒對準，把白紙本身當成人物了。
+    // 這一項要先判：整片白紙同時也會通過下面的面積門檻。
+    if (
+      box.width / imageData.width > 0.96
+      && box.height / imageData.height > 0.96
+    ) {
+      return { ok: false, reason: 'paper-background' };
+    }
+
+    // 面積太小或高度不足：孩子還沒塗、紙沒對準，或只掃到人物的一小截。
+    if (boxArea / canvasArea < 0.08 || box.height / imageData.height < 0.35) {
+      return { ok: false, reason: 'too-small' };
+    }
+
+    return { ok: true, box };
+  }
+
+  const api = {
+    applyMaskToImageData, boundingBoxOfAlpha, cropImageData, solidColorImageData, assessExtraction,
+  };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Extract = api;
 })(typeof window !== 'undefined' ? window : globalThis);
