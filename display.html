@@ -36,6 +36,7 @@
 <script src="src/scene.js"></script>
 <script src="src/artworkMessage.js"></script>
 <script src="src/channel.js"></script>
+<script src="src/artworkStore.js"></script>
 <script>
 (function () {
   const canvas = document.getElementById('tank');
@@ -89,6 +90,10 @@
     artworkIds: () => manager.renderable.map((c) => c.artworkId),
     pendingCount: () => manager.pendingCount,
     positions: () => manager.renderable.map((c) => ({ id: c.artworkId, x: c.x, baseY: c.baseY })),
+    // 存檔狀態：驗收要能分辨「沒存進去」與「存了但沒還原」。
+    storeAvailable: () => store.available,
+    savedCount: () => store.loadAll().then((records) => records.length),
+    savedIds: () => store.loadAll().then((records) => records.map((r) => r.artworkId)),
   };
 
   // 開場先放入幾位暖色調的示範人物，真的掃描結果進來時一樣加進同一個陣列。
@@ -157,20 +162,73 @@
   }
 
   // 示範人物走同一個 manager，才會一起算進 15 位的 FIFO 名額。
-  async function seedDemoCreatures() {
+  // 只補到「還原完之後剩下的空位」為止——孩子的作品優先於示範人物，
+  // 塞滿再讓 FIFO 去擠的話，被擠掉的會是剛還原回來的真作品。
+  async function seedDemoCreatures(slots) {
     for (const species of Species.SPECIES) {
+      if (slots <= 0) return;
       const image = await makeDemoTexture(species);
       if (!image) continue;
-      manager.enqueue({
+      const result = manager.enqueue({
         artworkId: `demo-${species.id}`,
         speciesId: species.id,
         image,
         ts: 0,
         isDemo: true,
       });
+      if (result === 'accepted') slots--;
     }
   }
-  seedDemoCreatures();
+
+  // 存進 IndexedDB 的作品，重新整理之後還原。
+  //
+  // 在這之前作品只活在這個分頁的記憶體裡：活動中不小心按到 F5、瀏覽器當掉、
+  // 或電腦休眠後分頁被回收，孩子畫的東西就全部消失，而且沒有補救方式——
+  // 原始的塗色紙早就還給孩子了。
+  const store = ArtworkStore.createArtworkStore();
+
+  function artworkFromMessage(msg, image) {
+    return {
+      artworkId: msg.artworkId, speciesId: msg.speciesId, image, ts: msg.ts,
+    };
+  }
+
+  function decodeArtwork(msg) {
+    return new Promise((resolve) => {
+      const image = new Image();
+      image.onload = () => resolve(artworkFromMessage(msg, image));
+      image.onerror = () => resolve(null); // 圖壞了就當這一張沒有，不擋住其他張
+      image.src = msg.textureDataURL;
+    });
+  }
+
+  async function restoreSavedArtworks() {
+    const saved = await store.loadAll();
+    // 還原走的是跟即時掃描**同一個**驗證函式：存壞的、被改過的、或舊版格式的
+    // 紀錄都會在這裡被擋下來，不會帶著壞資料進場。
+    const usable = ArtworkStore.selectRestorable(
+      saved.filter((record) => ArtworkMessage.isScannedArtworkMessage(record)),
+      manager.maxCharacters,
+    );
+    let restored = 0;
+    for (const msg of usable) {
+      const work = await decodeArtwork(msg);
+      if (work && manager.enqueue(work) === 'accepted') restored++;
+    }
+    return restored;
+  }
+
+  (async () => {
+    let restored = 0;
+    try {
+      restored = await restoreSavedArtworks();
+    } catch (error) {
+      restored = 0; // 還原失敗就當作全新的一場，不能讓畫面開不起來
+    }
+    if (restored > 0) showToast(`已找回 ${restored} 張作品`);
+    await seedDemoCreatures(manager.maxCharacters - restored);
+    store.prune();
+  })();
 
   function showToast(text) {
     toast.textContent = text;
@@ -186,13 +244,11 @@
 
     const img = new Image();
     img.onload = () => {
-      const result = manager.enqueue({
-        artworkId: msg.artworkId,
-        speciesId: msg.speciesId,
-        image: img,
-        ts: msg.ts,
-      });
+      const result = manager.enqueue(artworkFromMessage(msg, img));
       if (result === 'duplicate') return;
+      // 存檔是背景動作：存不進去（配額滿、私密視窗）也照樣讓角色登場，
+      // 只是重新整理之後找不回來而已。
+      store.save(msg).then((ok) => { if (ok) store.prune(); });
       const species = Species.getSpecies(msg.speciesId);
       showToast(`${(species && species.emoji) || '📖'} ${(species && species.name) || '聖經人物'}來到聖經樂園了！`);
     };
