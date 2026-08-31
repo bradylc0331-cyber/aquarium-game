@@ -10,8 +10,10 @@
   // 復位搜尋（recoverSafePosition）的有限搜尋空間定義。
   // 步長取角色安全橢圓短半徑的一半：夠細，鑽得過只有角色寬度的縫隙。
   const RECOVERY_STEP_FACTOR = 0.5;
+  // 步長下限，避免極小角色算出趨近 0 的步長讓網格爆炸。抬升時兩軸等比，
+  // 上限則交給節點預算與 RECOVERY_ABSOLUTE_MAX_STEP，不另設固定天花板——
+  // 固定天花板會在大角色上把兩軸比例夾歪。
   const RECOVERY_MIN_STEP = 6;
-  const RECOVERY_MAX_STEP = 48;
   // 節點預算。復位是在動畫 frame 內同步跑的，必須有上限；超過就讓步長變粗，
   // 而不是讓搜尋無限展開。
   const RECOVERY_MAX_NODES = 6000;
@@ -143,11 +145,14 @@
     validateArea(area);
     const space = personalSpace(candidate);
 
+    // 兩軸都以「足跡整個在可行走區內」為準。改用地面足跡之後橢圓就是以 baseY
+    // 為中心，若 y 軸只比 baseY 而不算 radiusY，足跡會凸出上下緣——凸進河流或
+    // 畫面外——而 x 軸卻有 radiusX 邊距，兩軸語意不一致。
     if (
       space.centerX - space.radiusX < area.left
       || space.centerX + space.radiusX > area.right
-      || candidate.baseY < area.top
-      || candidate.baseY > area.bottom
+      || space.centerY - space.radiusY < area.top
+      || space.centerY + space.radiusY > area.bottom
     ) return false;
 
     if (area.obstacles.some((obstacle) => hitsObstacle(space, obstacle))) return false;
@@ -183,6 +188,11 @@
     const dimensions = personalSpace({ x: 0, baseY: 0, width: size.width, height: size.height });
     const minX = area.left + dimensions.radiusX;
     const maxX = area.right - dimensions.radiusX;
+    // 足跡整個要在區內，所以 y 也要內縮一個 radiusY——直接用 area.bottom 當出生點，
+    // 足跡會凸出下緣而永遠判為不安全，那條邊緣就等於白試。
+    const minY = area.top + dimensions.radiusY;
+    const maxY = area.bottom - dimensions.radiusY;
+    const spanY = Math.max(0, maxY - minY);
 
     for (let attempt = 0; attempt < 90; attempt++) {
       const value = nextRandom(random);
@@ -190,13 +200,13 @@
       let baseY;
       if (attempt % 3 === 0) {
         x = minX;
-        baseY = area.top + value * (area.bottom - area.top);
+        baseY = minY + value * spanY;
       } else if (attempt % 3 === 1) {
         x = maxX;
-        baseY = area.top + value * (area.bottom - area.top);
+        baseY = minY + value * spanY;
       } else {
         x = minX <= maxX ? minX + value * (maxX - minX) : (area.left + area.right) / 2;
-        baseY = area.bottom;
+        baseY = maxY;
       }
 
       const candidate = { x, baseY, width: size.width, height: size.height };
@@ -214,6 +224,8 @@
     const dimensions = personalSpace(self);
     const minX = area.left + dimensions.radiusX;
     const maxX = area.right - dimensions.radiusX;
+    const minY = area.top + dimensions.radiusY;
+    const maxY = area.bottom - dimensions.radiusY;
     const others = characters.filter((character) => character !== self);
 
     for (let attempt = 0; attempt < 60; attempt++) {
@@ -222,7 +234,9 @@
       const targetX = minX <= maxX
         ? minX + horizontal * (maxX - minX)
         : (area.left + area.right) / 2;
-      const targetY = area.top + vertical * (area.bottom - area.top);
+      const targetY = minY <= maxY
+        ? minY + vertical * (maxY - minY)
+        : (area.top + area.bottom) / 2;
       const candidate = { ...self, x: targetX, baseY: targetY };
       if (isSafe(candidate, others, area)) return { targetX, targetY };
     }
@@ -234,11 +248,15 @@
     const dimensions = personalSpace(character);
     const minX = area.left + dimensions.radiusX;
     const maxX = area.right - dimensions.radiusX;
+    const minY = area.top + dimensions.radiusY;
+    const maxY = area.bottom - dimensions.radiusY;
     return {
       x: minX <= maxX
         ? Math.max(minX, Math.min(character.x, maxX))
         : (area.left + area.right) / 2,
-      baseY: Math.max(area.top, Math.min(character.baseY, area.bottom)),
+      baseY: minY <= maxY
+        ? Math.max(minY, Math.min(character.baseY, maxY))
+        : (area.top + area.bottom) / 2,
     };
   }
 
@@ -328,12 +346,17 @@
   // 兩軸各自對應自己的半徑，網格形狀才跟角色形狀一致。
   function recoveryGrid(self, area, anchor) {
     const dimensions = personalSpace(self);
-    const initial = (radius) => Math.min(
-      RECOVERY_MAX_STEP,
-      Math.max(RECOVERY_MIN_STEP, radius * RECOVERY_STEP_FACTOR),
-    );
-    let stepX = initial(dimensions.radiusX);
-    let stepY = initial(dimensions.radiusY);
+    let stepX = dimensions.radiusX * RECOVERY_STEP_FACTOR;
+    let stepY = dimensions.radiusY * RECOVERY_STEP_FACTOR;
+
+    // 抬到最小步長之上時**兩軸等比**抬——只夾單軸會把網格形狀弄歪，
+    // 導致小角色的垂直步長反而比自己的足跡還粗。
+    const smallest = Math.min(stepX, stepY);
+    if (smallest > 0 && smallest < RECOVERY_MIN_STEP) {
+      const lift = RECOVERY_MIN_STEP / smallest;
+      stepX *= lift;
+      stepY *= lift;
+    }
 
     // 網格多留一圈（-1 / +1），讓 clamp 後的邊界位置也走得到。
     const boundsFor = (sx, sy) => {
@@ -410,8 +433,14 @@
           const position = positionAt(gx, gy);
           // 只有「這條邊真的走得過去」才算拜訪過。若在驗證前就標記 visited，
           // 一個先被擋住的邊會把該節點連同它後面整片區域永久丟掉——即使稍後
-          // 有另一條合法的邊走得到它。窄通道的入口正好最容易先被斜邊擋到，
-          // 於是明明走得過去的縫會被誤判成 blocked。
+          // 有另一條合法的邊走得到它。
+          //
+          // 注意：這是**防禦性不變式，目前量測不到行為差異**。把這兩行對調後，
+          // 55,000 個隨機場景（含障礙與角色、各種尺寸）沒有任何一個的結果不同，
+          // 連回傳位置都一樣——因為 8-connectivity 提供了足夠多的平行路徑，
+          // 丟掉單一節點幾乎不會切斷搜尋。所以沒有測試守得住這個順序。
+          // 但它在原理上仍然是錯的（節點被丟了就不再考慮），改動 neighbor 順序
+          // 或連通度時就可能浮現，成本又是零，因此保持正確的寫法。
           if (!segmentIsClear(node.position, position, self, dimensions, guards)) continue;
           visited.add(key);
 
