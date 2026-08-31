@@ -129,6 +129,14 @@
     return { leftArmAngle: 0, rightArmAngle: 0, footYOffset: 0 };
   }
 
+  // 畫布高度相對於設計解析度（1080p）的比例。角色尺寸與移動速度共用這個比例，
+  // 換解析度時整個場景的視覺節奏才會一致。
+  const DESIGN_CANVAS_HEIGHT = 1080;
+  function speedScaleForCanvas(canvasHeight) {
+    if (!Number.isFinite(canvasHeight) || canvasHeight <= 0) return 1;
+    return canvasHeight / DESIGN_CANVAS_HEIGHT;
+  }
+
   function randRange([min, max]) {
     return min + Math.random() * (max - min);
   }
@@ -191,7 +199,11 @@
       this.targetY = this.baseY;
       this.vx = 0;
       this.vy = 0;
-      this.cruiseSpeed = (swim.speed[0] + swim.speed[1]) / 2;
+      // 速度要跟著畫布縮放，不能是固定的 px/s。角色的**尺寸**已經是依畫布高度
+      // 計算的（displaySize 取畫面高度的 ~26%），速度若維持固定像素值，4K 上的
+      // 角色看起來就只有 1080p 的一半速度——同樣一段路要走兩倍久。實測 4K 下
+      // 三分鐘內有三位角色連一個目標都到不了，1080p 則全部都到得了。
+      this.cruiseSpeed = (swim.speed[0] + swim.speed[1]) / 2 * speedScaleForCanvas(canvasHeight);
 
       this.state = 'entering';
       this.stateElapsed = 0;
@@ -240,6 +252,13 @@
       this.avoidHold = next.avoidHold;
       this.blocked = next.blocked;
       this.stalled = next.stalled;
+      this.path = next.path;
+      this.pathGoalX = next.pathGoalX;
+      this.pathGoalY = next.pathGoalY;
+      this.progressElapsed = next.progressElapsed;
+      this.progressAnchorDistance = next.progressAnchorDistance;
+      this.progressGoalX = next.progressGoalX;
+      this.progressGoalY = next.progressGoalY;
     }
 
     updateVisual(dt) {
@@ -413,6 +432,7 @@
     displaySize,
     collisionSize,
     depthScaleForY,
+    speedScaleForCanvas,
     transitionOpacity,
     gesturePose,
   };

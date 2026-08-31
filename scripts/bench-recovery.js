@@ -118,3 +118,27 @@ console.log('\n=== 正常運行：1920x1080、實際可行走區、15 位角色�
   console.log(`  場上 ${characters.length} 位（目標 15）  每 frame avg ${s.avg.toFixed(3)}ms  ${fmt(s)}  (60fps 預算 16.7ms)`);
   console.log(`  ${frames} frames 內：觸發復位 ${recoveries} 次、回報 blocked ${blocked} 次`);
 }
+
+console.log('\n=== 繞路規劃（planPath）：只在偵測到卡住時才跑，不是每一幀 ===');
+{
+  const area = Movement.getWalkableArea(1920, 1080);
+  const size = Creature.collisionSize({ width: 220, height: 400 }, 1920, 1080);
+  // 最貴的情境：目標在河的另一側，必須把整個網格走完才找得到下緣那條窄走廊。
+  const crosser = {
+    id: 'crosser', x: 1450, baseY: 720, ...size,
+    targetX: 406, targetY: 895, cruiseSpeed: 55, vx: 0, vy: 0,
+  };
+  const one = timed(() => Movement.planPath(crosser, [], area, crosser.targetX, crosser.targetY), 20);
+  console.log(`  單次（過河，要窮盡網格）              ${fmt(one)}`);
+
+  // 15 位散開、同一幀全部需要規劃的假想最壞情況。實際上各自的觀察窗是錯開的，
+  // 不會同時發生；這裡量的是理論上限。
+  const spread = [];
+  for (let i = 0; i < 15; i++) {
+    spread.push({ ...crosser, id: `c${i}`, x: 1450, baseY: 700 + i * 0.5 });
+  }
+  const all = timed(() => {
+    for (const c of spread) Movement.planPath(c, [], area, c.targetX, c.targetY);
+  }, 10);
+  console.log(`  15 位同一幀全部規劃（理論上限）       ${fmt(all)}  (60fps 預算 16.7ms)`);
+}
