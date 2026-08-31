@@ -217,3 +217,97 @@ test('天空中的飛鳥會往宣告方向前進且持續振翅', () => {
   assert.ok(bird.phase > phaseStart);
   assert.ok(bird.x > xStart);
 });
+
+test('羊遇到角色後會持續遠離，不會在 blocker 旁每幀來回翻向', () => {
+  const area = { left: 40, right: 960, top: 600, bottom: 930 };
+  const sheep = createSheepFlock(1000, 1000, () => 0.5)[0];
+  const blocker = { x: 510, baseY: sheep.baseY, width: 100 };
+  const blockerBefore = { ...blocker };
+  sheep.x = 500;
+  sheep.speed = 20;
+  sheep.direction = 1;
+  sheep.mode = 'walking';
+  sheep.modeTime = 10;
+
+  updateSheepFlock([sheep], 0.05, area, [blocker]);
+  assert.equal(sheep.direction, -1, '第一次接近角色時應該轉向');
+  const xAfterTurn = sheep.x;
+  for (let frame = 0; frame < 20; frame++) {
+    updateSheepFlock([sheep], 0.05, area, [blocker]);
+    assert.equal(sheep.direction, -1, `第 ${frame + 1} 幀不應再次翻向`);
+  }
+
+  assert.ok(xAfterTurn - sheep.x > 10, '轉向後應該明顯走離角色');
+  assert.ok(Number.isFinite(sheep.x));
+  assert.ok(sheep.x >= area.left && sheep.x <= area.right);
+  assert.deepEqual(blocker, blockerBefore, '羊的避讓不應改動角色狀態');
+});
+
+test('羊群在視窗放大與縮小後保留橫向及深度分布', () => {
+  const grownArea = { left: 77, right: 1843, top: 648, bottom: 1004 };
+  const grown = createSheepFlock(1280, 720, () => 0.5);
+  const grownXBefore = grown.map((sheep) => sheep.x);
+  const grownYBefore = grown.map((sheep) => sheep.baseY);
+
+  updateSheepFlock(grown, 0, grownArea);
+
+  assert.ok(grown.every((sheep, index) => sheep.x > grownXBefore[index]));
+  assert.ok(grown.every((sheep, index) => sheep.baseY > grownYBefore[index]));
+  assert.ok(grown.every((sheep) => sheep.x >= grownArea.left && sheep.x <= grownArea.right));
+  assert.ok(grown.every((sheep) => sheep.baseY >= grownArea.top && sheep.baseY <= grownArea.bottom));
+  assert.equal(new Set(grown.map((sheep) => sheep.x)).size, grown.length);
+  assert.equal(new Set(grown.map((sheep) => sheep.baseY)).size, grown.length);
+
+  const shrunkenArea = { left: 51, right: 1229, top: 432, bottom: 670 };
+  const shrunken = createSheepFlock(1920, 1080, () => 0.5);
+  const shrunkenXBefore = shrunken.map((sheep) => sheep.x);
+  const shrunkenYBefore = shrunken.map((sheep) => sheep.baseY);
+
+  updateSheepFlock(shrunken, 0, shrunkenArea);
+
+  assert.ok(shrunken.every((sheep, index) => sheep.x < shrunkenXBefore[index]));
+  assert.ok(shrunken.every((sheep, index) => sheep.baseY < shrunkenYBefore[index]));
+  assert.ok(shrunken.every((sheep) => sheep.x >= shrunkenArea.left && sheep.x <= shrunkenArea.right));
+  assert.ok(shrunken.every((sheep) => sheep.baseY >= shrunkenArea.top && sheep.baseY <= shrunkenArea.bottom));
+  assert.equal(new Set(shrunken.map((sheep) => sheep.x)).size, shrunken.length);
+  assert.equal(new Set(shrunken.map((sheep) => sheep.baseY)).size, shrunken.length);
+});
+
+test('飛鳥在視窗縮放時重設天空高度與入場位置', () => {
+  const grown = createBirdFlock(1280, 720);
+  const grownHomeY = grown.map((bird) => bird.homeY);
+  const grownX = grown[1].x;
+
+  updateBirdFlock(grown, 0, 1920, 1080);
+
+  assert.ok(grown.every((bird, index) => bird.homeY > grownHomeY[index]));
+  assert.ok(grown.every((bird) => bird.homeY > 50 && bird.homeY < 350));
+  assert.ok(grown[1].x > grownX);
+  assert.ok(grown.every((bird) => Number.isFinite(bird.x) && Number.isFinite(bird.y) && Number.isFinite(bird.phase)));
+
+  const shrunken = createBirdFlock(1920, 1080);
+  const farRightLeftMover = shrunken[5];
+  updateBirdFlock(shrunken, 0.05, 1280, 720);
+
+  assert.ok(shrunken.every((bird) => bird.homeY > 40 && bird.homeY < 240));
+  assert.ok(farRightLeftMover.x <= 1400, '縮小後的左飛鳥要立即回到可進場的右側');
+  assert.ok(shrunken.every((bird) => Number.isFinite(bird.x) && Number.isFinite(bird.y) && Number.isFinite(bird.phase)));
+});
+
+test('飛鳥在 production dt 會從兩端回來且維持有限狀態', () => {
+  const [rightBird, leftBird] = createBirdFlock(1000, 800);
+  rightBird.direction = 1;
+  rightBird.x = 1060;
+  leftBird.direction = -1;
+  leftBird.x = -60;
+  const rightPhase = rightBird.phase;
+  const leftPhase = leftBird.phase;
+
+  updateBirdFlock([rightBird, leftBird], 0.05, 1000, 800);
+
+  assert.ok(rightBird.x < 0);
+  assert.ok(leftBird.x > 1000);
+  assert.notEqual(rightBird.phase, rightPhase);
+  assert.notEqual(leftBird.phase, leftPhase);
+  assert.ok([rightBird, leftBird].every((bird) => Number.isFinite(bird.x) && Number.isFinite(bird.y) && Number.isFinite(bird.phase)));
+});

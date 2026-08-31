@@ -205,7 +205,16 @@
     return 0.72 + depth * 0.33;
   }
 
+  function walkableBoundsFor(w, h) {
+    return { left: w * 0.04, right: w * 0.96, top: h * 0.60, bottom: h * 0.93 };
+  }
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
   function createSheepFlock(w, h, random = Math.random) {
+    const bounds = walkableBoundsFor(w, h);
     return SHEEP_X_RATIOS.map((nx, i) => ({
       kind: 'sheep',
       x: w * nx,
@@ -217,6 +226,7 @@
       width: 78,
       height: 58,
       phase: i * 1.17,
+      walkableBounds: { ...bounds },
     }));
   }
 
@@ -224,13 +234,32 @@
     if (!blocker || !Number.isFinite(blocker.x) || !Number.isFinite(blocker.baseY)) return false;
     const horizontal = Math.max(34, ((blocker.width || 80) + sheep.width) * 0.35);
     const vertical = Math.max(18, sheep.height * 0.42);
-    return Math.abs(nextX - blocker.x) < horizontal
-      && Math.abs(sheep.baseY - blocker.baseY) < vertical;
+    const nextDistance = Math.abs(nextX - blocker.x);
+    return nextDistance < horizontal
+      && Math.abs(sheep.baseY - blocker.baseY) < vertical
+      && nextDistance < Math.abs(sheep.x - blocker.x);
+  }
+
+  function rebaseSheepForArea(sheep, area) {
+    const previous = sheep.walkableBounds;
+    if (!previous) {
+      sheep.walkableBounds = { ...area };
+      return;
+    }
+    const resized = previous.left !== area.left || previous.right !== area.right
+      || previous.top !== area.top || previous.bottom !== area.bottom;
+    if (!resized) return;
+    const xRatio = (sheep.x - previous.left) / Math.max(1, previous.right - previous.left);
+    const depth = (sheep.baseY - previous.top) / Math.max(1, previous.bottom - previous.top);
+    sheep.x = area.left + clamp(xRatio, 0, 1) * (area.right - area.left);
+    sheep.baseY = area.top + clamp(depth, 0, 1) * (area.bottom - area.top);
+    sheep.walkableBounds = { ...area };
   }
 
   function updateSheepFlock(flock, dt, area, blockers = [], random = Math.random) {
     for (const sheep of flock) {
-      sheep.baseY = Math.max(area.top, Math.min(area.bottom, sheep.baseY));
+      rebaseSheepForArea(sheep, area);
+      sheep.baseY = clamp(sheep.baseY, area.top, area.bottom);
       sheep.modeTime -= dt;
       if (sheep.modeTime <= 0) {
         sheep.mode = sheep.mode === 'walking' ? 'grazing' : 'walking';
@@ -262,12 +291,28 @@
       height: 27 - (i % 3) * 2,
       phase: i * 1.31,
       flapSpeed: 4.6 + (i % 3) * 0.55,
+      viewportWidth: w,
+      viewportHeight: h,
     }));
+  }
+
+  function rebaseBirdForViewport(bird, w, h) {
+    if (bird.viewportWidth === w && bird.viewportHeight === h) return false;
+    bird.x = bird.x / bird.viewportWidth * w;
+    bird.y = bird.y / bird.viewportHeight * h;
+    bird.homeY = bird.homeY / bird.viewportHeight * h;
+    bird.viewportWidth = w;
+    bird.viewportHeight = h;
+    return true;
   }
 
   function updateBirdFlock(flock, dt, w, h) {
     const margin = Math.max(50, w * 0.06);
     for (const bird of flock) {
+      if (rebaseBirdForViewport(bird, w, h)) {
+        if (bird.direction > 0 && bird.x < -margin) bird.x = -margin;
+        if (bird.direction < 0 && bird.x > w + margin) bird.x = w + margin;
+      }
       bird.phase += bird.flapSpeed * dt;
       bird.x += bird.direction * bird.speed * dt;
       bird.y = Math.max(h * 0.06, Math.min(h * 0.32, bird.homeY + Math.sin(bird.phase * 0.45) * h * 0.008));
