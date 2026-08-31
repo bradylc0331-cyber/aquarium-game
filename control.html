@@ -87,6 +87,7 @@
     <div class="row">
       <button id="sendBtn" class="secondary" disabled>✅ 送到聖經樂園</button>
       <button id="rescanBtn" class="secondary" disabled>🔁 重新掃描</button>
+      <button id="resetSceneBtn" class="secondary">🧹 開始新的一場</button>
     </div>
 
     <h2 style="margin-top:16px">等待登場與最近送出</h2>
@@ -374,6 +375,7 @@
   const resultCanvas = document.getElementById('resultCanvas');
   const sendBtn = document.getElementById('sendBtn');
   const rescanBtn = document.getElementById('rescanBtn');
+  const resetSceneBtn = document.getElementById('resetSceneBtn');
   const logEl = document.getElementById('log');
   const activityLog = [];
 
@@ -588,6 +590,21 @@
   rescanBtn.onclick = () => {
     clearScanResult();
     setScanStatus('ok', '準備好了，把塗色紙放進框內後按手動掃描');
+  };
+
+  // 「開始新的一場」：清掉投影畫面上與存檔裡的所有作品。
+  //
+  // 是不可回復的動作，而且按鈕就在掃描按鈕旁邊，所以一定要先確認過。
+  // 上一場孩子的作品清掉就沒有了——原始的塗色紙早就還給他們了。
+  resetSceneBtn.onclick = () => {
+    const ok = window.confirm(
+      '要清空聖經樂園、開始新的一場嗎？\n\n'
+      + '這會把畫面上與存檔裡的所有作品刪掉，而且無法復原。',
+    );
+    if (!ok) return;
+    channel.send(ArtworkMessage.createResetMessage());
+    addLog(`${new Date().toLocaleTimeString('zh-TW')} — 🧹 已清空聖經樂園，開始新的一場`);
+    setScanStatus('ok', '已清空，新的一場可以開始了');
   };
 
   sendBtn.onclick = () => {

@@ -29,6 +29,24 @@
     };
   }
 
+  // 「開始新的一場」：叫投影畫面清掉所有存下來的作品重新開始。
+  //
+  // 是破壞性的動作，所以走一個獨立的訊息型別而不是塞進作品訊息裡——
+  // 型別分開，投影端才能各自驗證，不會有一則壞掉的作品訊息意外觸發清空。
+  function createResetMessage({ now = Date.now } = {}) {
+    return { type: 'scene-reset', ts: Number(now()) };
+  }
+
+  function isResetMessage(value) {
+    return Boolean(
+      value
+      && typeof value === 'object'
+      && !Array.isArray(value)
+      && value.type === 'scene-reset'
+      && Number.isFinite(value.ts),
+    );
+  }
+
   function submitScannedArtwork(scanResult, {
     send,
     now = Date.now,
@@ -69,6 +87,8 @@
     createArtworkScanResult,
     createScannedArtworkMessage,
     isScannedArtworkMessage,
+    createResetMessage,
+    isResetMessage,
     submitScannedArtwork,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

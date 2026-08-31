@@ -239,6 +239,13 @@
 
   const channel = AquariumChannel.createChannel();
   channel.onMessage((msg) => {
+    // 「開始新的一場」：先把存檔清乾淨**再**重新載入。順序反了的話，
+    // 重新載入會把剛才那些作品原封不動地還原回來，等於沒清。
+    if (ArtworkMessage.isResetMessage(msg)) {
+      store.clear().then(() => window.location.reload());
+      return;
+    }
+
     // 先驗證訊息本身，再去載圖——壞掉的訊息不該占用名額，也不該淘汰場上角色。
     if (!ArtworkMessage.isScannedArtworkMessage(msg)) return;
 

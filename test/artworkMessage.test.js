@@ -5,6 +5,8 @@ const {
   createArtworkScanResult,
   createScannedArtworkMessage,
   isScannedArtworkMessage,
+  createResetMessage,
+  isResetMessage,
   submitScannedArtwork,
 } = require('../src/artworkMessage.js');
 
@@ -119,4 +121,34 @@ test('延遲提交 A 後即使最新掃描變成 B，計時器仍送出 A 的原
     ts: 202,
   }]);
   assert.equal(latestScanResult, workB);
+});
+
+test('清場訊息與作品訊息是兩個獨立型別，不會互相誤觸', () => {
+  // 清場是不可回復的動作。型別分開，投影端才能各自驗證——
+  // 一則壞掉或被竄改的作品訊息絕對不能意外把整場清掉。
+  const reset = createResetMessage({ now: () => 1234 });
+
+  assert.equal(isResetMessage(reset), true);
+  assert.equal(isScannedArtworkMessage(reset), false, '清場訊息不該被當成作品');
+
+  const artwork = createScannedArtworkMessage({
+    artworkId: 'art-abc123',
+    speciesId: 'noah',
+    textureDataURL: 'data:image/png;base64,AAAA',
+    now: () => 1,
+  });
+  assert.equal(isResetMessage(artwork), false, '作品訊息不該被當成清場指令');
+});
+
+test('isResetMessage 擋掉形狀不對的東西', () => {
+  for (const bad of [
+    null, undefined, 'scene-reset', 42, [],
+    { type: 'scene-reset' },                  // 缺 ts
+    { type: 'scene-reset', ts: NaN },
+    { type: 'scene-reset', ts: 'now' },
+    { type: 'creature-scanned', ts: 1 },
+    [{ type: 'scene-reset', ts: 1 }],         // 陣列不算
+  ]) {
+    assert.equal(isResetMessage(bad), false, `不該接受 ${JSON.stringify(bad)}`);
+  }
 });

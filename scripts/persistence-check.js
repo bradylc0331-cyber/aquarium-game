@@ -137,6 +137,30 @@ const INJECT = (count) => {
       `場上 ${onStage.length - onStage.filter((id) => id.startsWith('demo-')).length} + 排隊 ${waiting}`);
     check(onStage.length <= 15, '場上不超過 15 位', `實際 ${onStage.length}`);
 
+    // 「開始新的一場」：控制台送出清場指令後，投影畫面要真的清乾淨——
+    // 而且清空必須發生在重新載入**之前**，否則重載會把作品原封不動還原回來。
+    await page.evaluate(() => {
+      const channel = new BroadcastChannel('jeju-aquarium-game');
+      channel.postMessage({ type: 'scene-reset', ts: Date.now() });
+    });
+    await page.waitForFunction(() => window.__bibleDebug && window.__bibleDebug.characterCount() > 0,
+      { timeout: 20000 });
+    await settle(page);
+    const afterReset = await page.evaluate(() => window.__bibleDebug.artworkIds());
+    const savedAfterReset = await page.evaluate(() => window.__bibleDebug.savedIds());
+    check(savedAfterReset.length === 0, '清場後存檔清空', `實際 ${savedAfterReset.length} 筆`);
+    check(afterReset.every((id) => id.startsWith('demo-')), '清場後畫面只剩示範人物',
+      afterReset.filter((id) => !id.startsWith('demo-')).join(',') || '乾淨');
+
+    // 再重新整理一次：清場之後的重載不該把舊作品變回來
+    await page.reload();
+    await page.waitForFunction(() => window.__bibleDebug && window.__bibleDebug.characterCount() > 0,
+      { timeout: 20000 });
+    await settle(page);
+    const afterResetReload = await page.evaluate(() => window.__bibleDebug.artworkIds());
+    check(afterResetReload.every((id) => id.startsWith('demo-')), '清場後再重新整理仍然乾淨',
+      afterResetReload.filter((id) => !id.startsWith('demo-')).join(',') || '乾淨');
+
     // 沒有 IndexedDB 的環境（私密視窗類比）也要開得起來
     const strict = await browser.newContext({ viewport: { width: 800, height: 600 } });
     const blocked = await strict.newPage();
