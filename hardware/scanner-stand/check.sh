@@ -72,5 +72,13 @@ chk gap_plus      zero    "往外挪 0.1 要完全分開"
 chk gap_minus     nonzero "往內壓 0.5 要咬得到（證明真的有貼合）"
 
 echo
+echo "== 3. 列印板（3mf/）=="
+if python3 -c "import trimesh, networkx" 2>/dev/null; then
+  python3 check-3mf.py || fail=1
+else
+  echo "  略過：需要 pip install trimesh networkx"
+fi
+
+echo
 [ "$fail" = 0 ] && echo "全部通過。" || echo "有項目不合格，見上面。"
 exit $fail
