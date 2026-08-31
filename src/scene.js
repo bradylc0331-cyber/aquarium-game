@@ -220,9 +220,66 @@
     }));
   }
 
+  function sheepHitsBlocker(sheep, nextX, blocker) {
+    if (!blocker || !Number.isFinite(blocker.x) || !Number.isFinite(blocker.baseY)) return false;
+    const horizontal = Math.max(34, ((blocker.width || 80) + sheep.width) * 0.35);
+    const vertical = Math.max(18, sheep.height * 0.42);
+    return Math.abs(nextX - blocker.x) < horizontal
+      && Math.abs(sheep.baseY - blocker.baseY) < vertical;
+  }
+
+  function updateSheepFlock(flock, dt, area, blockers = [], random = Math.random) {
+    for (const sheep of flock) {
+      sheep.baseY = Math.max(area.top, Math.min(area.bottom, sheep.baseY));
+      sheep.modeTime -= dt;
+      if (sheep.modeTime <= 0) {
+        sheep.mode = sheep.mode === 'walking' ? 'grazing' : 'walking';
+        sheep.modeTime = sheep.mode === 'grazing' ? 2 + random() * 3 : 5 + random() * 6;
+      }
+      if (sheep.mode !== 'walking') continue;
+      const nextX = sheep.x + sheep.direction * sheep.speed * dt;
+      const hitsEdge = nextX < area.left || nextX > area.right;
+      const hitsCharacter = blockers.some((blocker) => sheepHitsBlocker(sheep, nextX, blocker));
+      if (hitsEdge || hitsCharacter) {
+        sheep.direction *= -1;
+        sheep.x = Math.max(area.left, Math.min(area.right, sheep.x));
+      } else {
+        sheep.x = nextX;
+      }
+    }
+  }
+
+  const BIRD_LAYOUT = [
+    [-0.08, 0.18, 1], [0.14, 0.24, 1], [0.34, 0.16, 1],
+    [0.66, 0.22, -1], [0.84, 0.14, -1], [1.08, 0.25, -1],
+  ];
+
+  function createBirdFlock(w, h) {
+    return BIRD_LAYOUT.map(([nx, ny, direction], i) => ({
+      x: w * nx, y: h * ny, homeY: h * ny, direction,
+      speed: 18 + i * 2.4,
+      width: 42 - (i % 3) * 4,
+      height: 27 - (i % 3) * 2,
+      phase: i * 1.31,
+      flapSpeed: 4.6 + (i % 3) * 0.55,
+    }));
+  }
+
+  function updateBirdFlock(flock, dt, w, h) {
+    const margin = Math.max(50, w * 0.06);
+    for (const bird of flock) {
+      bird.phase += bird.flapSpeed * dt;
+      bird.x += bird.direction * bird.speed * dt;
+      bird.y = Math.max(h * 0.06, Math.min(h * 0.32, bird.homeY + Math.sin(bird.phase * 0.45) * h * 0.008));
+      if (bird.direction > 0 && bird.x > w + margin) bird.x = -margin;
+      if (bird.direction < 0 && bird.x < -margin) bird.x = w + margin;
+    }
+  }
+
   const api = {
     createBubbles, updateBubbles, drawBubbles, drawBackground, drawRiverFlow, drawForeground,
-    gustStrength, drawCanopySway, createSheepFlock, sheepScaleForY,
+    gustStrength, drawCanopySway, createSheepFlock, sheepScaleForY, updateSheepFlock,
+    createBirdFlock, updateBirdFlock,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.AquariumScene = api;

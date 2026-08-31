@@ -8,6 +8,9 @@ const {
   drawForeground,
   createSheepFlock,
   sheepScaleForY,
+  updateSheepFlock,
+  createBirdFlock,
+  updateBirdFlock,
 } = require('../src/scene.js');
 
 // 用 Proxy 假裝一個 CanvasRenderingContext2D：任何方法呼叫都是 no-op，
@@ -133,4 +136,84 @@ test('羊景深縮放在草地範圍外也會夾住且保持單調', () => {
     assert.ok(scale >= previous);
     previous = scale;
   }
+});
+
+test('羊會在吃草與走動間切換，走動時碰到邊界或角色就轉向', () => {
+  const area = { left: 40, right: 960, top: 600, bottom: 930 };
+  const sheep = createSheepFlock(1000, 1000, () => 0.5)[0];
+  sheep.mode = 'grazing';
+  sheep.modeTime = 0.01;
+  updateSheepFlock([sheep], 0.02, area, [], () => 0.5);
+  assert.equal(sheep.mode, 'walking');
+
+  sheep.x = area.right - 1;
+  sheep.direction = 1;
+  sheep.mode = 'walking';
+  sheep.modeTime = 10;
+  updateSheepFlock([sheep], 1, area, [], () => 0.5);
+  assert.equal(sheep.direction, -1);
+  assert.ok(sheep.x <= area.right);
+
+  sheep.x = 500;
+  sheep.direction = 1;
+  updateSheepFlock([sheep], 0.1, area, [{ x: 505, baseY: sheep.baseY, width: 100 }], () => 0.5);
+  assert.equal(sheep.direction, -1);
+});
+
+test('羊群更新會把超出草地的高度夾回範圍', () => {
+  const area = { left: 40, right: 960, top: 600, bottom: 930 };
+  const sheep = createSheepFlock(1000, 1000, () => 0.5)[0];
+  sheep.baseY = area.bottom + 120;
+
+  updateSheepFlock([sheep], 0, area);
+
+  assert.equal(sheep.baseY, area.bottom);
+});
+
+test('走動的羊會前進，吃草的羊保持原地', () => {
+  const area = { left: 40, right: 960, top: 600, bottom: 930 };
+  const [walking, grazing] = createSheepFlock(1000, 1000, () => 0.5);
+  walking.x = 400;
+  walking.direction = 1;
+  walking.mode = 'walking';
+  walking.modeTime = 10;
+  grazing.x = 600;
+  grazing.mode = 'grazing';
+  grazing.modeTime = 10;
+  const walkingStart = walking.x;
+  const grazingStart = grazing.x;
+
+  updateSheepFlock([walking, grazing], 0.5, area);
+
+  assert.ok(walking.x > walkingStart);
+  assert.equal(grazing.x, grazingStart);
+});
+
+test('飛鳥固定六隻、分布在天空，而且振翅相位不同', () => {
+  const birds = createBirdFlock(1000, 800);
+  assert.equal(birds.length, 6);
+  assert.ok(birds.every((bird) => bird.y > 40 && bird.y < 320));
+  assert.ok(new Set(birds.map((bird) => bird.phase)).size > 3);
+});
+
+test('飛鳥離開一側後從另一側回到天空，不會永遠消失', () => {
+  const bird = createBirdFlock(1000, 800)[0];
+  bird.direction = 1;
+  bird.x = 1100;
+  updateBirdFlock([bird], 0.1, 1000, 800);
+  assert.ok(bird.x < 0);
+  assert.ok(bird.y > 0 && bird.y < 320);
+});
+
+test('天空中的飛鳥會往宣告方向前進且持續振翅', () => {
+  const bird = createBirdFlock(1000, 800)[1];
+  bird.x = 400;
+  bird.direction = 1;
+  const phaseStart = bird.phase;
+  const xStart = bird.x;
+
+  updateBirdFlock([bird], 0.25, 1000, 800);
+
+  assert.ok(bird.phase > phaseStart);
+  assert.ok(bird.x > xStart);
 });
