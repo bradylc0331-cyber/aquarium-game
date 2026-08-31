@@ -246,6 +246,16 @@
       this.baseY = next.baseY;
       this.vx = next.vx;
       this.vy = next.vy;
+      // 移動層放在角色身上的狀態要**整包**帶回來，下一幀 steerCharacter 才讀得到。
+      // 只搬 x/baseY/vx/vy 的話，繞行方向的認定每一幀都會被丟掉，角色就退回
+      // 「左一步右一步」的兩幀擺動——那個 bug 只會出現在瀏覽器裡，因為測試是
+      // 直接用物件展開傳遞狀態的，看不到這一層。
+      this.avoidHeadingX = next.avoidHeadingX;
+      this.avoidHeadingY = next.avoidHeadingY;
+      this.avoidScale = next.avoidScale;
+      this.avoidHold = next.avoidHold;
+      this.blocked = next.blocked;
+      this.stalled = next.stalled;
     }
 
     updateVisual(dt) {

@@ -311,25 +311,181 @@ test('steerCharacter 朝目標產生速度，垂直地面移動較慢且不改�
   assert.deepEqual({ self, characters }, snapshot);
 });
 
-test('steerCharacter 預見鄰居後先減速或側移，最終不重疊', () => {
-  const self = character();
-  const neighbor = character({ id: 'neighbor', x: 390, targetX: 390 });
-  const characters = [self, neighbor];
+test('steerCharacter 遇到擋路的鄰居會真的繞過去，不是停在原地', () => {
+  // 舊版斷言是 `result.x < 310 || result.baseY !== 600`：原地停住就滿足前半，
+  // 所以整段柔性避碰程式碼刪掉測試照樣全綠。要驗的是**真的繞過去了**，
+  // 也就是最後越過鄰居、抵達目標，而不是「有做了某件不是全速前進的事」。
+  const neighbor = character({ id: 'neighbor', x: 390, targetX: 390, cruiseSpeed: 1 });
+  const area = openArea();
+  let self = character({ targetX: 700, targetY: 600 });
 
-  const result = steerCharacter(self, characters, openArea(), 0.1);
+  const startX = self.x;
+  for (let frame = 0; frame < 600; frame++) {
+    const characters = [self, neighbor];
+    const next = steerCharacter(self, characters, area, 1 / 60);
+    self = { ...self, ...next };
+    assert.equal(
+      spacesOverlap(personalSpace(self), personalSpace(neighbor)), false,
+      `第 ${frame} 幀與鄰居重疊`,
+    );
+  }
 
-  assert.ok(result.x < 310 || result.baseY !== 600);
-  assert.equal(spacesOverlap(personalSpace(result), personalSpace(neighbor)), false);
+  assert.ok(
+    self.x > neighbor.x + personalSpace(neighbor).radiusX,
+    `必須繞過鄰居（鄰居在 x=${neighbor.x}，10 秒後只走到 x=${self.x.toFixed(1)}，起點 ${startX}）`,
+  );
 });
 
-test('steerCharacter 預見障礙後側移或減速，不會走進障礙', () => {
-  const self = character();
-  const area = openArea({ obstacles: [{ x: 360, y: 500, width: 100, height: 200 }] });
+test('steerCharacter 遇到擋路的障礙會真的繞過去，不是停在原地', () => {
+  // 同上：原地不動也能滿足舊的 disjunctive 斷言。這裡要求角色實際走到障礙的另一側。
+  const obstacle = { x: 360, y: 500, width: 100, height: 200 };
+  const area = openArea({ obstacles: [obstacle] });
+  let self = character({ targetX: 700, targetY: 600 });
 
-  const result = steerCharacter(self, [self], area, 0.1);
+  for (let frame = 0; frame < 600; frame++) {
+    const next = steerCharacter(self, [self], area, 1 / 60);
+    self = { ...self, ...next };
+    assert.equal(
+      hitsObstacle(personalSpace(self), obstacle), false,
+      `第 ${frame} 幀走進障礙`,
+    );
+  }
 
-  assert.ok(result.x < 310 || result.baseY !== 600);
-  assert.equal(hitsObstacle(personalSpace(result), area.obstacles[0]), false);
+  assert.ok(
+    self.x > obstacle.x + obstacle.width,
+    `必須繞過障礙（障礙右緣 x=${obstacle.x + obstacle.width}，10 秒後只走到 x=${self.x.toFixed(1)}）`,
+  );
+});
+
+test('單獨一位角色也不得永久卡死：四周還有安全方向時必須繼續前進', () => {
+  // 這是實測抓到的狀態：1920x1080 真實可行走區、沒有任何鄰居、角色本身安全、
+  // blocked 為 false、目標還在 171px 外，而 36 個取樣方向裡有 19 個一幀之內是安全的。
+  // 舊版控制器只試「朝目標」與其 ±90° 兩條固定支線，三條都被河流的角落切到，
+  // 就落到 {vx:0, vy:0} 永遠停住——輸入每一幀都一樣，所以是永久的。
+  const area = getWalkableArea(1920, 1080);
+  const wedged = {
+    id: 'solo',
+    x: 1382.9023941464409,
+    baseY: 938.9579286408338,
+    targetX: 1382.9103240966795,
+    targetY: 768.371153497696,
+    width: 162,
+    height: 295,
+    cruiseSpeed: 55,
+    vx: 0,
+    vy: 0,
+  };
+
+  // 前提：角色是安全的（所以走的不是復位路徑），而且四周真的有路可走。
+  assert.equal(isSafe(wedged, [], area), true);
+  const dt = 1 / 60;
+  let safeDirections = 0;
+  for (let degrees = 0; degrees < 360; degrees += 10) {
+    const radians = (degrees * Math.PI) / 180;
+    const step = {
+      ...wedged,
+      x: wedged.x + Math.cos(radians) * wedged.cruiseSpeed * dt,
+      baseY: wedged.baseY + Math.sin(radians) * wedged.cruiseSpeed * dt,
+    };
+    if (isSafe(step, [], area)) safeDirections++;
+  }
+  assert.ok(safeDirections > 12, `前提：四周要有明顯多條路可走（實際 ${safeDirections}/36）`);
+
+  const result = steerCharacter(wedged, [wedged], area, dt);
+
+  assert.equal(result.blocked, false);
+  const moved = Math.hypot(result.x - wedged.x, result.baseY - wedged.baseY);
+  assert.ok(moved > 0, `目標還在 171px 外、四周有 ${safeDirections}/36 條路，卻一步都沒動`);
+});
+
+test('長時間運行後角色仍在移動、也還到得了目標，不會整場凍住', () => {
+  // 規格要角色「在整個可行走區自由移動」。單看一幀永遠看不出凍結：卡住的角色
+  // 每一幀都回傳安全、blocked=false 的合法結果，只是位置再也不變。
+  // 只有把整個迴圈跑起來、量最後一段時間的實際位移，才驗得到這條規格。
+  //
+  // 量的是**走過的路徑長**，不是頭尾直線距離。繞一圈回到附近是正常的漫遊，
+  // 用直線距離會把它誤判成卡住；反過來原地小幅擺動的路徑長很短，分得開。
+  //
+  // 視窗取 30 秒而不是 10 秒：實測 15 位擠在 356px 高的草地上，任何一位都可能
+  // 有某個 10 秒視窗只走 74px——那是規格允許的「暫時過於擁擠就降速等空間」，
+  // 不是卡死。但沒有任何一位會連續 30 秒走不動。多解析度、多 seed 一起跑，
+  // 免得又是挑到剛好會過的那一組。
+  const dt = 1 / 60;
+  const frames = 5400;              // 90 秒
+  const measureFrom = frames - 1800; // 最後 30 秒
+
+  // 解析度與 seed 是從 20 組全掃裡挑**最難**的那幾組釘住的，不是挑會過的。
+  // 全掃結果：每位角色最後 30 秒最少走 263px、全場最少抵達 12 次。
+  for (const [[W, H], initialSeed] of [
+    [[1920, 1080], 1], [[1920, 1080], 777777],
+    [[1280, 720], 1], [[1280, 720], 42],
+    [[3840, 2160], 1], [[3840, 2160], 777777],
+  ]) {
+    {
+      const area = getWalkableArea(W, H);
+      let seed = initialSeed;
+      const random = () => {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        return seed / 2147483648;
+      };
+      const size = displaySize({ width: 220, height: 400 }, W, H, 1.05);
+      const characters = [];
+      // 換目標走的是 display.html 用的同一條路徑：chooseSafeTarget 會挑一個
+      // 本身安全的點。純隨機挑點會挑到別人身上或障礙裡，那是測試自己造出來的
+      // 不可達目標，不是實作的問題。
+      const retarget = (character, crowd) => ({
+        ...character,
+        ...chooseSafeTarget(character, crowd, area, random),
+      });
+      const travel = new Map();
+      let arrivals = 0;
+
+      for (let frame = 0; frame < frames; frame++) {
+        while (characters.length < 15) {
+          const spawn = findSafeSpawn(size, characters, area, random);
+          if (!spawn) break;
+          characters.push(retarget({
+            id: `c${characters.length}`, ...spawn, ...size,
+            targetX: spawn.x, targetY: spawn.baseY,
+            cruiseSpeed: 40 + random() * 30, vx: 0, vy: 0,
+          }, characters));
+        }
+
+        for (let i = 0; i < characters.length; i++) {
+          const before = characters[i];
+          const next = steerCharacter(before, characters, area, dt);
+          characters[i] = { ...before, ...next };
+          if (frame >= measureFrom) {
+            const step = Math.hypot(next.x - before.x, next.baseY - before.baseY);
+            travel.set(before.id, (travel.get(before.id) || 0) + step);
+          }
+          const reached = Math.hypot(next.targetX - next.x, next.targetY - next.baseY) < 20;
+          if (reached) arrivals++;
+          // 整合層（display.html）的行為：到了目標、或是回報走不動，就換新目標。
+          if (reached || next.stalled) characters[i] = retarget(characters[i], characters);
+        }
+      }
+
+      const label = `${W}x${H} seed=${initialSeed}`;
+      assert.equal(characters.length, 15, `${label}：前提是 15 位都要進得了場`);
+
+      // 每一位在最後 30 秒都必須真的走了一段路。門檻 200px 對照實測：
+      // 修好之後最差 263px，凍結的版本則是 0～45px（十秒視窗），差距很大。
+      const distances = characters.map((c) => travel.get(c.id) || 0);
+      const idle = distances.filter((d) => d < 200).length;
+      assert.equal(
+        idle, 0,
+        `${label}：最後 30 秒有 ${idle}/15 位幾乎沒走動`
+          + `（各自路徑長 ${distances.map((d) => d.toFixed(0)).join(', ')}）`,
+      );
+
+      // 光是「有在動」還不夠——原地繞小圈也會有路徑長。角色必須真的抵達目標，
+      // 才代表牠們是朝著目標移動，而不是在障礙前面來回踱步。
+      // 門檻壓在 10：cruiseSpeed 是固定的 px/s，不隨畫布放大，所以 4K 下同樣
+      // 90 秒能走的相對距離只有 1080p 的一半，抵達次數自然少（實測 12 次）。
+      assert.ok(arrivals >= 10, `${label}：90 秒內全場只抵達目標 ${arrivals} 次，太少`);
+    }
+  }
 });
 
 test('steerCharacter 將位置限制在邊界，沒有安全前進路徑時保持安全靜止', () => {

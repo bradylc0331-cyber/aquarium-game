@@ -12,6 +12,7 @@ const {
   drawCharacterName,
 } = require('../src/creature.js');
 const { getSpecies } = require('../src/species.js');
+const Movement = require('../src/movement.js');
 
 test('fish 樣式：t=0 且 phase=0 時沒有垂直位移，尾巴縮放在 1 附近', () => {
   const off = motionOffset('fish', 0, { amplitude: 20, freq: 2, phase: 0 });
@@ -223,4 +224,41 @@ test('自然踏步時左右腿角度相反，半個週期後交換前後腳', ()
   assert.ok(a.leftFront);
   assert.ok(!b.leftFront);
   assert.ok(a.leftAngle > 0 && b.leftAngle < 0);
+});
+
+test('setMovement 要把移動層的整包狀態帶回角色，否則繞行認定每幀被丟掉', () => {
+  // display.html 是把 Creature 實例直接餵給 steerCharacter 的，所以 steerCharacter
+  // 寫在回傳值上的狀態必須經由 setMovement 回到實例上。這裡不逐一列舉欄位——
+  // 那樣以後新增欄位一樣會漏。改成比對兩條軌跡：一條走 Creature.setMovement，
+  // 一條走純物件展開（測試裡慣用的傳遞方式）。兩者必須完全一致。
+  const area = Movement.getWalkableArea(1600, 900);
+  const creature = makeCreature({ spawn: { x: area.left + 60, baseY: area.bottom - 40 } });
+  creature.targetX = area.right - 60;
+  creature.targetY = area.top + 40;
+  creature.cruiseSpeed = 60;
+
+  let plain = {
+    id: 'plain',
+    x: creature.x, baseY: creature.baseY,
+    width: creature.width, height: creature.height,
+    targetX: creature.targetX, targetY: creature.targetY,
+    cruiseSpeed: creature.cruiseSpeed, vx: 0, vy: 0,
+  };
+
+  const dt = 1 / 60;
+  for (let frame = 0; frame < 600; frame++) {
+    creature.setMovement(Movement.steerCharacter(creature, [creature], area, dt));
+    plain = { ...plain, ...Movement.steerCharacter(plain, [plain], area, dt) };
+    assert.ok(
+      Math.abs(creature.x - plain.x) < 1e-9 && Math.abs(creature.baseY - plain.baseY) < 1e-9,
+      `第 ${frame} 幀分歧：Creature (${creature.x.toFixed(3)}, ${creature.baseY.toFixed(3)})`
+        + ` vs 純物件 (${plain.x.toFixed(3)}, ${plain.baseY.toFixed(3)})`,
+    );
+  }
+
+  // 前提：這一段路真的有觸發繞行，否則兩條軌跡本來就一樣，比對是空的。
+  assert.ok(
+    Number.isFinite(creature.avoidHeadingX) || Number.isFinite(plain.avoidHeadingX),
+    '前提：這條路徑上要真的有進入閃避，測試才有意義',
+  );
 });

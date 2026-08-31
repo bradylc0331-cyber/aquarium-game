@@ -211,9 +211,12 @@
     manager.update(dt);
 
     for (const character of creatures) {
-      // 到了目標就換一個新目標，形成持續的自由漫遊
+      // 到了目標、或是移動層回報走不動，就換一個新目標，形成持續的自由漫遊。
+      // stalled 是必要的：角色可能安全地卡在一個所有方向都被擋住的口袋裡，
+      // 這時牠不是 blocked（牠很安全），只是永遠到不了目標。沒有這個訊號，
+      // 那一位會靜止到活動結束。
       const reached = Math.hypot(character.targetX - character.x, character.targetY - character.baseY) < 12;
-      if (reached) {
+      if (reached || character.stalled) {
         const target = Movement.chooseSafeTarget(character, creatures, walkable);
         character.targetX = target.targetX;
         character.targetY = target.targetY;
@@ -225,9 +228,8 @@
         if (character.blockedRetry > 0) continue;
         character.blockedRetry = 0.5;
       }
-      const next = Movement.steerCharacter(character, creatures, walkable, dt);
-      character.setMovement(next);
-      character.blocked = next.blocked;
+      // setMovement 會把移動層的整包狀態（含繞行認定與 blocked／stalled）帶回角色。
+      character.setMovement(Movement.steerCharacter(character, creatures, walkable, dt));
       character.drivenByMovement = true;
     }
 

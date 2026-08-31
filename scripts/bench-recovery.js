@@ -102,7 +102,9 @@ console.log('\n=== 正常運行：1920x1080、實際可行走區、15 位角色�
       const next = Movement.steerCharacter(before, characters, area, dt);
       if (next.blocked) blocked++;
       characters[i] = next;
-      if (Math.hypot(next.targetX - next.x, next.targetY - next.baseY) < 20) {
+      // 要跟 display.html 一樣「到了目標或走不動就換目標」。少了 stalled 這一半，
+      // 量到的會是一群卡住不動的角色的成本，那不是實際運行的樣子。
+      if (Math.hypot(next.targetX - next.x, next.targetY - next.baseY) < 20 || next.stalled) {
         characters[i] = {
           ...next,
           targetX: area.left + random() * (area.right - area.left),

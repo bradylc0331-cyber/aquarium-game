@@ -1,5 +1,22 @@
 (function (root) {
   const VERTICAL_SPEED_FACTOR = 0.55;
+  // 閃避時的轉向扇形（度）。由小到大試，讓角色盡量貼著原本的方向繞過去，
+  // 一路試到 180°（原路折返），死路裡的角色才有退路。
+  //
+  // 誠實說明它的份量：真正解掉「整場凍住」的是下面三件事——認定繞行方向、
+  // 要求實際位移、以及 stalled 訊號。扇形本身是防禦縱深。實測 4000 組隨機
+  // 單角色場景找不到任何一組「只有 ±90° 會卡住、完整扇形走得出去」；20 組
+  // 解析度×seed 的整場掃描裡，兩者的差異也是隨場景互有高低的雜訊。
+  // 留著是因為可行走區的障礙是照背景圖量出來的，換背景就會變，多幾個角度
+  // 對沒測過的地形比較耐撞；但不要宣稱是它修好了凍結。
+  const AVOID_TURN_ANGLES = [15, 30, 45, 60, 90, 120, 150, 180];
+  // 規格要求的「優先減速」用的速率。
+  const AVOID_SLOW_SCALE = 0.2;
+  // 威脅解除後認定方向再保留這麼久（秒），避免在障礙轉角處反覆換邊。
+  const AVOID_COMMIT_SECONDS = 1.5;
+  // 一個方向要算「走得動」，實際位移至少要有預期位移的這個比例。
+  // 低於這個比例代表位移被邊界 clamp 吃掉了，換下一個方向。
+  const MIN_PROGRESS_FRACTION = 0.5;
   const COLLISION_EPSILON = 1e-12;
 
   // 地面足跡的寬度相對角色可見寬度的比例（腳站的範圍比整個人窄）。
@@ -520,35 +537,87 @@
       return { ...self, x: self.x, baseY: self.baseY, vx: 0, vy: 0, blocked: false };
     }
 
-    const desiredVx = dx / distance * self.cruiseSpeed;
-    const desiredVy = dy / distance * self.cruiseSpeed * VERTICAL_SPEED_FACTOR;
+    // 速度一律由「單位方向 + 速率」組出來，不要直接旋轉速度向量：vy 帶著
+    // VERTICAL_SPEED_FACTOR 的壓縮，旋轉速度向量會把這個各向異性攪亂，
+    // 轉出來的方向就不是想要的那個角度了。
+    const dirX = dx / distance;
+    const dirY = dy / distance;
+    const velocityAlong = (ux, uy, speedScale) => ({
+      vx: ux * self.cruiseSpeed * speedScale,
+      vy: uy * self.cruiseSpeed * VERTICAL_SPEED_FACTOR * speedScale,
+    });
+
+    const desired = velocityAlong(dirX, dirY, 1);
     const lookAhead = Math.max(dt, 0.75);
     const predicted = clampPosition({
       ...self,
-      x: self.x + desiredVx * lookAhead,
-      baseY: self.baseY + desiredVy * lookAhead,
+      x: self.x + desired.vx * lookAhead,
+      baseY: self.baseY + desired.vy * lookAhead,
     }, area);
     const threatened = !pathIsSafe(self, others, area, predicted.x, predicted.baseY);
     const threat = threatened ? threatDirection(self, others, area, predicted.x, predicted.baseY) : null;
 
+    // 繞行要**認定一個絕對方向並走一段**，不能每一幀重算。
+    //
+    // 只記「往哪一邊繞」是不夠的。角色被擠到貼著障礙側面時，扇形裡那兩個
+    // ±90° 的選項都是相對**目標方向**旋轉出來的，不是相對障礙表面，所以兩個
+    // 都還帶著一點指向障礙的分量。於是 +1 那個把角色推進牆裡（不安全）、
+    // -1 那個往外一點（安全），下一幀角色退開了一點 +1 又變安全——就成了
+    // 兩幀極限環：實測 x 釘在 333.1、y 在 619.54 與 620.45 之間來回，
+    // 側別自始至終都是 1，跑十秒完全沒繞過去。
+    //
+    // 記住選定的那個**絕對單位方向**並優先沿用，角色才會沿直線走出一段
+    // 足以脫離障礙的位移，而不是在原地抖。
+    const heading = finite(self.avoidHeadingX) && finite(self.avoidHeadingY)
+      ? { ux: self.avoidHeadingX, uy: self.avoidHeadingY, scale: self.avoidScale }
+      : null;
+    let avoidHold = Math.max(0, (finite(self.avoidHold) ? self.avoidHold : 0) - dt);
+
     const options = [];
     if (threatened) {
-      const desiredLength = Math.hypot(desiredVx, desiredVy) || 1;
-      const perpendicularX = -desiredVy / desiredLength;
-      const perpendicularY = desiredVx / desiredLength;
-      const cross = threat ? desiredVx * threat.y - desiredVy * threat.x : 0;
-      const firstSide = cross > 0 ? -1 : 1;
-      for (const side of [firstSide, -firstSide]) {
-        options.push({
-          vx: desiredVx * 0.3 + perpendicularX * self.cruiseSpeed * 0.7 * side,
-          vy: desiredVy * 0.3 + perpendicularY * self.cruiseSpeed * VERTICAL_SPEED_FACTOR * 0.7 * side,
-        });
+      // 認定中的繞行方向優先沿用，而且**不設時限**：只要還在閃避、而且這個方向
+      // 還走得通，就一直走下去。設 1.5 秒時限試過，繞不完一個 200px 高的障礙就
+      // 到期重挑，角色會在障礙前面來回遊走十秒也過不去。改由「方向本身走不通」
+      // 或「不再需要閃避」來結束認定，才是真的沿著障礙走過去。
+      if (heading && finite(heading.scale)) {
+        options.push({ ...velocityAlong(heading.ux, heading.uy, heading.scale), ...heading });
       }
-      options.push({ vx: desiredVx * 0.2, vy: desiredVy * 0.2 });
+
+      // 規格：「優先減速，其次改變方向」。減速排在轉向之前——但只有在
+      // 「減速真的解得開」時才算數：拿整個 look-ahead 區間去驗，而不是只驗
+      // 這一幀那 0.33px 的一小步。只驗一小步的話，角色會用 0.2 倍速一路蹭到
+      // 貼著障礙為止，那不是減速禮讓，那是慢動作撞牆。
+      const slow = velocityAlong(dirX, dirY, AVOID_SLOW_SCALE);
+      const slowAhead = clampPosition({
+        ...self,
+        x: self.x + slow.vx * lookAhead,
+        baseY: self.baseY + slow.vy * lookAhead,
+      }, area);
+      if (pathIsSafe(self, others, area, slowAhead.x, slowAhead.baseY)) {
+        options.push({ ...slow, ux: dirX, uy: dirY, scale: AVOID_SLOW_SCALE, fresh: true });
+      }
+
+      // 轉向扇形，由小角度往大角度試，角色才會盡量沿著原本要去的方向繞過去。
+      // 舊版只有固定的 ±90° 兩條支線；三條路（目標方向與兩條垂直線）同時被擋住
+      // 時就沒有別的選擇，只能停下來——而輸入每一幀都一樣，所以是**永久**停住。
+      // 實測一位沒有鄰居的角色在 36 個取樣方向中有 19 個可走的情況下照樣凍結，
+      // 整場 15 位最後全部靜止、30 秒總位移 0.000px。
+      const cross = threat ? desired.vx * threat.y - desired.vy * threat.x : 0;
+      const firstSide = cross > 0 ? -1 : 1;
+      for (const degrees of AVOID_TURN_ANGLES) {
+        for (const side of [firstSide, -firstSide]) {
+          const radians = (degrees * Math.PI / 180) * side;
+          const cos = Math.cos(radians);
+          const sin = Math.sin(radians);
+          const ux = dirX * cos - dirY * sin;
+          const uy = dirX * sin + dirY * cos;
+          options.push({ ...velocityAlong(ux, uy, 1), ux, uy, scale: 1, fresh: true });
+        }
+      }
     } else {
-      options.push({ vx: desiredVx, vy: desiredVy });
+      options.push(desired);
     }
-    options.push({ vx: 0, vy: 0 });
+    options.push({ vx: 0, vy: 0, stop: true });
 
     for (const velocity of options) {
       const unclamped = {
@@ -558,6 +627,22 @@
       };
       const position = clampPosition(unclamped, area);
       if (!pathIsSafe(self, others, area, position.x, position.baseY)) continue;
+
+      // 一個方向「安全」還不夠，得真的走得動。方向指向可行走區邊界時 clamp 會把
+      // 位移吃掉，結果是安全的、也不等於原位（差在浮點尾數），角色卻幾乎沒動：
+      // 實測認定方向是正上方 (-0.02, -1.00) 的角色貼在上緣，十秒只走了 11.9px，
+      // 每一幀都「有移動」所以停滯也偵測不到。要求實際位移至少是預期的一半，
+      // 走不動的方向就會被跳過，換扇形裡下一個真的走得出去的方向。
+      const intended = Math.hypot(velocity.vx * dt, velocity.vy * dt);
+      const achieved = Math.hypot(position.x - self.x, position.baseY - self.baseY);
+      if (intended > 0 && achieved < intended * MIN_PROGRESS_FRACTION) continue;
+      // 沿用認定方向時 hold 繼續遞減；重新挑到一個方向時才補滿計時。
+      // 沒在繞行（一路暢通或停住）就把認定清掉。
+      // 選到閃避方向就記住它。沒在閃避（一路暢通）時不要馬上忘掉——威脅常常
+      // 只是短暫消失一兩幀，立刻清掉會讓角色在障礙的轉角處反覆換邊。
+      // 留 AVOID_COMMIT_SECONDS 的餘裕，過了才真的放掉。
+      const chosenAvoid = finite(velocity.ux) && finite(velocity.uy);
+      const keepPrevious = !chosenAvoid && heading !== null && avoidHold > 0;
       return {
         ...self,
         x: position.x,
@@ -565,6 +650,15 @@
         vx: (position.x - self.x) / dt,
         vy: (position.baseY - self.baseY) / dt,
         blocked: false,
+        avoidHeadingX: chosenAvoid ? velocity.ux : (keepPrevious ? heading.ux : undefined),
+        avoidHeadingY: chosenAvoid ? velocity.uy : (keepPrevious ? heading.uy : undefined),
+        avoidScale: chosenAvoid ? velocity.scale : (keepPrevious ? heading.scale : undefined),
+        avoidHold: chosenAvoid ? AVOID_COMMIT_SECONDS : (keepPrevious ? avoidHold : 0),
+        // 扇形搜尋讓凍結變得很少見，但不可能保證絕不發生（角色可能安全地卡在
+        // 一個所有方向都被擋住的口袋裡）。stalled 就是給整合層的訊號：這一位
+        // 走不動了，換一個目標再試。這跟 blocked 是不同的事——blocked 是
+        // 「找不到任何安全點」，stalled 的角色本身是安全的，只是去不了目標。
+        stalled: velocity.stop === true,
       };
     }
 
