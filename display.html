@@ -31,6 +31,7 @@
 <script src="src/svgRaster.js"></script>
 <script src="src/extract.js"></script>
 <script src="src/movement.js"></script>
+<script src="src/flight.js"></script>
 <script src="src/creature.js"></script>
 <script src="src/characterManager.js"></script>
 <script src="src/scene.js"></script>
@@ -54,6 +55,8 @@
   const flock = Array.from({ length: 3 }, () => AquariumScene.createSheep(canvas.width, canvas.height));
   // 可行走區在每一幀重算（視窗會被縮放），角色移動與羊的避讓共用同一份。
   let walkable = Movement.getWalkableArea(canvas.width, canvas.height);
+  // 天空帶：會飛的角色在這裡飄，完全不跟地面角色搶位子。
+  let sky = Flight.getSkyArea(canvas.width, canvas.height);
 
   // 規格：畫面最多同時 15 位；第 16 位進場時第 1 位先淡出，依 FIFO 循環。
   // 掃描失敗或找不到安全入口的作品留在 pending，不占名額也不淘汰場上角色。
@@ -66,8 +69,12 @@
       // 出生檢查要用**碰撞**尺寸（最近景的大小），不能用某個景深下的繪製尺寸。
       // 否則角色往下走變大之後就會突然重疊，每一幀都觸發完整復位搜尋。
       const size = CreatureModule.collisionSize(work.image, canvas.width, canvas.height);
-      const spawn = Movement.findSafeSpawn(size, manager.renderable, walkable);
-      if (!spawn) return null; // 沒有安全入口就留在 pending 等空間，不縮小也不重疊
+      // 會飛的角色從天空進場，跟地面完全分開；地面擠不擠跟牠無關。
+      const flying = !(species.swim.style === 'walk' || species.swim.grounded === true);
+      const spawn = flying
+        ? Flight.findSkySpawn(size, manager.renderable, sky)
+        : Movement.findSafeSpawn(size, manager.renderable, walkable);
+      if (!spawn) return null; // 沒有位子就留在 pending 等空間，不縮小也不重疊
       return new CreatureModule.Creature({
         artworkId: work.artworkId,
         image: work.image,
@@ -271,9 +278,20 @@
     elapsed += dt;
 
     walkable = Movement.getWalkableArea(canvas.width, canvas.height);
+    sky = Flight.getSkyArea(canvas.width, canvas.height);
     manager.update(dt);
 
-    for (const character of creatures) {
+    // 地面與天空是兩個獨立的族群：地面角色只跟地面角色避讓，天使只跟天使讓開。
+    // 混在一起算的話，天使會被當成地面上的障礙，草地反而更擠。
+    const walkers = creatures.filter((c) => !c.isFlying);
+    const flyers = creatures.filter((c) => c.isFlying);
+
+    for (const flyer of flyers) {
+      flyer.setMovement(Flight.driftFlyer(flyer, flyers, sky, dt));
+      flyer.drivenByMovement = true;
+    }
+
+    for (const character of walkers) {
       // 到了目標、或是移動層回報走不動，就換一個新目標，形成持續的自由漫遊。
       // stalled 是必要的：角色可能安全地卡在一個所有方向都被擋住的口袋裡，
       // 這時牠不是 blocked（牠很安全），只是永遠到不了目標。沒有這個訊號，
@@ -284,8 +302,8 @@
         // 一選再選，角色朝著到不了的地方撞、卡住、再換一個對岸的點，原地打轉。
         // 抵達目標時用便宜的那個就好，不必每次都跑一趟 BFS。
         const target = character.stalled
-          ? Movement.chooseReachableTarget(character, creatures, walkable)
-          : Movement.chooseSafeTarget(character, creatures, walkable);
+          ? Movement.chooseReachableTarget(character, walkers, walkable)
+          : Movement.chooseSafeTarget(character, walkers, walkable);
         character.targetX = target.targetX;
         character.targetY = target.targetY;
       }
@@ -297,14 +315,15 @@
         character.blockedRetry = 0.5;
       }
       // setMovement 會把移動層的整包狀態（含繞行認定與 blocked／stalled）帶回角色。
-      character.setMovement(Movement.steerCharacter(character, creatures, walkable, dt));
+      character.setMovement(Movement.steerCharacter(character, walkers, walkable, dt));
       character.drivenByMovement = true;
     }
 
     AquariumScene.updateBubbles(bubbles, dt, canvas.width, canvas.height);
     for (const sheep of flock) {
       // 羊要同時避開角色與其他羊，否則整群會慢慢疊在一起變成一坨白影
-      const blockers = [...creatures, ...flock.filter((other) => other !== sheep)];
+      // 羊只需要避開地面角色——天上的天使擋不到牠。
+      const blockers = [...walkers, ...flock.filter((other) => other !== sheep)];
       AquariumScene.updateSheep(sheep, dt, canvas.width, canvas.height, blockers);
     }
 

@@ -178,6 +178,12 @@
       this.sizeScale = swim.sizeScale || 1;
 
       this.isGrounded = this.style === 'walk' || swim.grounded === true;
+      // 會飛的角色（天使）不走地面那套移動控制器：天空裡沒有障礙物、沒有河流，
+      // 也不需要景深足跡。牠們由 Flight.driftFlyer 驅動，並且不算進地面的擁擠度。
+      this.isFlying = !this.isGrounded;
+      this.driftDirection = Math.random() < 0.5 ? -1 : 1;
+      this.driftPhase = Math.random() * Math.PI * 2;
+      this.driftElapsed = 0;
       // 景深縮放的參考帶必須跟可行走區一致，否則角色走到帶底時算出的縮放
       // 會落在區間外（被夾住），近景就不會變大。呼叫端（display.html）傳入
       // Movement.getWalkableArea 的上下緣；沒傳時用同一組預設值。
@@ -252,6 +258,9 @@
       this.avoidHold = next.avoidHold;
       this.blocked = next.blocked;
       this.stalled = next.stalled;
+      // 飛行角色的飄移狀態也要帶回來，否則方向與相位每一幀重置，天使會原地抖。
+      if (next.driftDirection !== undefined) this.driftDirection = next.driftDirection;
+      if (next.driftElapsed !== undefined) this.driftElapsed = next.driftElapsed;
       this.path = next.path;
       this.pathGoalX = next.pathGoalX;
       this.pathGoalY = next.pathGoalY;
