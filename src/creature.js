@@ -260,6 +260,9 @@
       this.progressGoalX = next.progressGoalX;
       this.progressGoalY = next.progressGoalY;
       this.planAttempts = next.planAttempts;
+      this.spreadAnchorX = next.spreadAnchorX;
+      this.spreadAnchorY = next.spreadAnchorY;
+      this.spread = next.spread;
     }
 
     updateVisual(dt) {

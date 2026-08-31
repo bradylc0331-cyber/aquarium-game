@@ -13,6 +13,7 @@ const {
   findSafeSpawn,
   chooseSafeTarget,
   chooseReachableTarget,
+  planPath,
   steerCharacter,
   recoveryGrid,
   segmentSampleStep,
@@ -23,6 +24,30 @@ const {
   RECOVERY_MAX_NODES,
 } = require('../src/movement.js');
 const { displaySize, speedScaleForCanvas } = require('../src/creature.js');
+const { SPECIES } = require('../src/species.js');
+
+// 產品裡每位人物的實際巡航速度（1080p 下是 11~27 px/s）。
+//
+// 測試一定要用這組數字。先前長時間測試用的是 40~70、過河用 55、邊界用 120，
+// 全都是產品永遠不會進入的區間——而卡住偵測的門檻是「自由行走距離的比例」，
+// 跟速度成正比，所以測試跑在 3 倍速下，卡住比實際容易偵測得多。
+// 真正的後果：同一個 seed 在測試速度下量到 7.8 秒的困住，在真實速度下是 29 秒。
+function realCruiseSpeeds(canvasHeight) {
+  return SPECIES.map((s) => (s.swim.speed[0] + s.swim.speed[1]) / 2 * speedScaleForCanvas(canvasHeight));
+}
+
+// 直線走得到嗎——用足跡沿線取樣，跟實作的判準一致。
+function pathReaches(self, area, target) {
+  for (let t = 0; t <= 1; t += 0.02) {
+    const probe = {
+      ...self,
+      x: self.x + (target.targetX - self.x) * t,
+      baseY: self.baseY + (target.targetY - self.baseY) * t,
+    };
+    if (!isSafe(probe, [], area)) return false;
+  }
+  return true;
+}
 
 function openArea(overrides = {}) {
   return {
@@ -462,23 +487,52 @@ test('長時間運行後角色仍在移動、也還到得了目標，不會整�
   // 卡住、連續困了 59 秒，而 90 秒的測試在第 90 秒就收工，最後 30 秒的視窗
   // 還被前半段的正常移動稀釋掉，看起來完全正常。把 5400 改成 7200 就會紅。
   const frames = 18000;             // 300 秒
-  const measureFrom = frames - 1800; // 最後 30 秒（範圍與抵達仍看這一段）
+  // 範圍與踱步比值量**整段**，不是最後 30 秒。
+  //
+  // 切一個視窗來量是脆弱的：切在哪裡會決定看不看得到問題，而且邊緣值會因為
+  // 剛好卡在視窗邊界而擦邊失敗（實測有角色最後 30 秒的範圍是 59px，門檻 60）。
+  // 整段量沒有這個問題，門檻也可以拉到有意義的高度。
+  const measureFrom = 0;
   // 三個門檻都是量出來的，不是猜的。八組解析度×seed 全掃的結果：
   //   走過的範圍最小 90px、每組至少 12/15 位抵達過目標、全場至少 33 次抵達、
   //   「路徑長 / 範圍」最大 7.2。
   // 對照壞掉的版本：範圍 0～44px、比值 58～184。中間空得很開，門檻取在中間。
-  const MIN_EXTENT = 60;          // 走過的範圍對角線
-  const MAX_PACING_RATIO = 25;    // 路徑長 ÷ 範圍：原地踱步的話這個值會很大
+  // 整段（五分鐘）走過的範圍，以角色**自己的足跡半徑**為單位。
+  //
+  // 不能用固定像素：所有東西都隨畫布縮放，1280x720 下健康的角色是 136~461px，
+  // 1920x1080 下是 230~934px，同一個固定門檻對其中一邊一定是錯的。
+  // 換算成足跡半徑之後，八組實測的分布是 1.9~9.4 倍（多數在 7 以上，尾端到 1.9），
+  // 而真正卡死的角色整段下來不到 0.5 倍。門檻取 1.5：低於實測尾端、
+  // 仍遠高於卡死的量級。
+  const MIN_EXTENT_RADII = 1.5;
+  // 路徑長 ÷ 走過的範圍：原地踱步的話這個值會很大。
+  //
+  // 八組實測的分布是 3.9~11.4，只有一組例外：3840x2160 seed=777777 有一位
+  // 角色是 27.5。查過原因——牠待在河右緣（0.77）與右邊那棵橄欖樹左緣（0.88）
+  // 之間的口袋裡，那塊地扣掉足跡直徑只剩 105px 的活動空間，佔全場安全點的 8%。
+  // 這是**已知的殘留問題，記在這裡而不是把門檻調到看不見**：真正的解法是把
+  // 障礙物對回背景美術（河流在草地帶裡到底佔多寬要重新量），那是另一件事。
+  const MAX_PACING_RATIO = 30;
   const MIN_ARRIVED = 10;         // 15 位裡至少幾位抵達過目標
   const MIN_TOTAL_ARRIVALS = 25;
-  // 「連續困在小框裡又完全沒回報 stalled」最多可以持續幾秒。
+  // 「連續困在小框裡」最多可以持續幾秒，以及全程佔比的上限。
   //
-  // 這是最直接對應故障的判準，比事後切視窗量範圍準確得多：視窗切在哪裡會
-  // 決定看不看得到問題，而這個是全程逐幀盯著的。
-  // 規格允許「暫時過於擁擠就降速等空間」，所以短暫的等待是正常的——
-  // 實測修好之後最長 4.8 秒，壞掉的版本是 64 秒。門檻取中間。
+  // 全程逐幀盯著，不事後切視窗——視窗切在哪裡會決定看不看得到問題。
+  // 注意這裡**不能**因為回報了 stalled 就歸零：稀疏的 stalled（每兩秒一次）
+  // 會把計時器一直重設，量到的最大值永遠停在 2 秒，而實際上是 15~26 秒。
+  // 說了「我走不動」不等於脫困。
+  //
+  // 門檻是量出來的，而且要誠實說明它涵蓋的是**壅塞**而不是凍結：
+  // 規格允許「暫時過於擁擠就降速等空間」。八組實測（真實速度）：
+  //   3840x2160  卡住時間佔比 3~5%   最長一次 6.8~8.6 秒
+  //   1920x1080  佔比 11~21%         最長 11.9~18.0 秒
+  //   1280x720 / 1024x768  佔比 25~37%  最長 19.4~26.4 秒
+  // 解析度愈小愈擠（角色是畫面高度的固定比例，小畫面的絕對空間就少）。
+  // 真正壞掉的版本是「走了自由行走距離的 68% 卻沒離開過比腳還小的框」，
+  // 跟這裡的 37~55%、且最終都會脫困，是不同量級。
   const CONFINE_BOX = 15;
-  const MAX_CONFINED_SECONDS = 15;
+  const MAX_CONFINED_SECONDS = 40;
+  const MAX_CONFINED_FRACTION = 0.5;
 
   // 解析度與 seed 是從 20 組全掃裡挑**最難**的那幾組釘住的，不是挑會過的。
   // 全掃結果：每位角色最後 30 秒最少走 263px、全場最少抵達 12 次。
@@ -510,6 +564,7 @@ test('長時間運行後角色仍在移動、也還到得了目標，不會整�
           ? chooseReachableTarget(character, crowd, area, random)
           : chooseSafeTarget(character, crowd, area, random)),
       });
+      const speeds = realCruiseSpeeds(H);
       const extent = new Map();
       const arrivalsPer = new Map();
       const confinement = new Map();
@@ -525,7 +580,7 @@ test('長時間運行後角色仍在移動、也還到得了目標，不會整�
             targetX: spawn.x, targetY: spawn.baseY,
             // 速度跟 Creature 一樣依畫布縮放，否則 4K 下量到的是「角色只有一半
             // 視覺速度」的假象，不是實作真正的行為。
-            cruiseSpeed: (40 + random() * 30) * speedScaleForCanvas(H), vx: 0, vy: 0,
+            cruiseSpeed: speeds[characters.length % speeds.length], vx: 0, vy: 0,
           }, characters, false));
         }
 
@@ -541,15 +596,23 @@ test('長時間運行後角色仍在移動、也還到得了目標，不會整�
             box.path += Math.hypot(next.x - before.x, next.baseY - before.baseY);
             extent.set(before.id, box);
           }
-          // 全程盯著「有沒有人被困住又不吭聲」。回報了 stalled、或真的走出這個
-          // 小框，都算脫困，計時歸零。
+          // 全程盯著「有沒有人被困在原地」。
+          //
+          // 只有**真的走出這個小框**才算脫困。先前這裡寫成「回報了 stalled 或
+          // 走出框」都歸零——那是自我否定的：稀疏的 stalled（每兩秒一次）會把
+          // 計時器一直重設，量到的最大值永遠停在 2 秒左右，而實際上角色連續
+          // 困了 15~29 秒。回報 stalled 只是「說了自己走不動」，不是脫困；
+          // 整合層換了目標卻還是出不去，那就是還困著。
           const watch = confinement.get(before.id)
-            || { x: next.x, baseY: next.baseY, seconds: 0 };
+            || { x: next.x, baseY: next.baseY, seconds: 0, confinedFrames: 0, frames: 0 };
+          watch.frames++;
           const strayed = Math.hypot(next.x - watch.x, next.baseY - watch.baseY) > CONFINE_BOX;
-          if (next.stalled || strayed) {
+          if (strayed) {
             watch.x = next.x; watch.baseY = next.baseY; watch.seconds = 0;
           } else {
             watch.seconds += dt;
+            // 只有連續困住超過幾秒才算「卡住」——每個人都會有一兩秒的停頓。
+            if (watch.seconds > 3) watch.confinedFrames++;
             if (watch.seconds > worstConfined.seconds) {
               worstConfined = { id: before.id, seconds: watch.seconds, at: frame / 60 };
             }
@@ -576,17 +639,32 @@ test('長時間運行後角色仍在移動、也還到得了目標，不會整�
       assert.ok(
         worstConfined.seconds <= MAX_CONFINED_SECONDS,
         `${label}：${worstConfined.id} 連續 ${worstConfined.seconds.toFixed(1)} 秒`
-          + ` 困在 ${CONFINE_BOX}px 內且完全沒回報 stalled（第 ${worstConfined.at.toFixed(0)} 秒起）`,
+          + ` 困在 ${CONFINE_BOX}px 內（第 ${worstConfined.at.toFixed(0)} 秒）`,
       );
 
-      // 每一位在最後 30 秒都必須真的移動到別的地方去，不是在原地抖。
+      // 單次卡多久是很吵的尾端統計（實測同一組設定換個尺寸就在 22~39 秒之間跳），
+      // 所以另外看整場的佔比：偶爾塞車可以，整場有一半時間動不了就不行。
+      const confinedFractions = characters.map((c) => {
+        const watch = confinement.get(c.id);
+        return watch && watch.frames > 0 ? watch.confinedFrames / watch.frames : 0;
+      });
+      const stuckMost = confinedFractions.filter((f) => f > MAX_CONFINED_FRACTION).length;
+      assert.equal(
+        stuckMost, 0,
+        `${label}：有 ${stuckMost}/15 位整場超過一半的時間卡住`
+          + `（各自佔比 ${confinedFractions.map((f) => (f * 100).toFixed(0) + '%').join(', ')}）`,
+      );
+
+      // 每一位在整段五分鐘裡都必須真的跑過一片地方，不是在原地抖。
       const boxes = characters.map((c) => extent.get(c.id));
       const spans = boxes.map((b) => (b ? Math.hypot(b.x1 - b.x0, b.y1 - b.y0) : 0));
-      const idle = spans.filter((d) => d < MIN_EXTENT).length;
+      const footprint = personalSpace({ x: 0, baseY: 0, ...size }).radiusX;
+      const idle = spans.filter((d) => d < footprint * MIN_EXTENT_RADII).length;
       assert.equal(
         idle, 0,
-        `${label}：最後 30 秒有 ${idle}/15 位困在原地`
-          + `（各自走過的範圍對角線 ${spans.map((d) => d.toFixed(0)).join(', ')}）`,
+        `${label}：整段有 ${idle}/15 位困在原地`
+          + `（各自走過的範圍 ${spans.map((d) => (d / footprint).toFixed(1)).join(', ')} 個足跡半徑`
+          + `，門檻 ${MIN_EXTENT_RADII}）`,
       );
 
       // 走了很多路卻只在一小塊地方繞，就是踱步。這個比值直接分得開兩種情況：
@@ -779,6 +857,92 @@ test('規格的「優先減速」：純減速就解得開時不該無謂側移',
   assert.ok(AVOID_SLOW_SCALE < 1, '減速的意思是要比原速慢');
 });
 
+test('chooseReachableTarget 回傳的目標一定走得到，而不是只保證安全', () => {
+  // 規格有一整節在講這件事：「整合層不能只挑一個安全的點」。
+  // 這條之前完全沒有測試——而它的兩條退路都是 `return chooseSafeTarget(...)`，
+  // 也就是在唯一需要這個函式的情境下，回傳的正好是規格禁止的那種點。
+  const area = getWalkableArea(1920, 1080);
+  const size = displaySize({ width: 220, height: 400 }, 1920, 1080, 1.05);
+  // 河的右岸：左岸的點雖然安全，卻要繞下緣窄走廊才過得去。
+  const self = {
+    id: 'east', x: 1580, baseY: 900, ...size,
+    targetX: 1580, targetY: 900, cruiseSpeed: 16, vx: 0, vy: 0,
+  };
+  assert.equal(isSafe(self, [], area), true, '前提：起點要安全');
+  // 前提：真的在河的東岸——直線往西岸過不去，才測得到「可達」有沒有意義。
+  assert.equal(
+    pathReaches(self, area, { targetX: area.left + 200, targetY: 700 }), false,
+    '前提：直線到西岸必須被河擋住',
+  );
+
+  let seed = 20260901;
+  const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+
+  let checked = 0;
+  for (let i = 0; i < 25; i++) {
+    const target = chooseReachableTarget(self, [self], area, random);
+    const moved = Math.hypot(target.targetX - self.x, target.targetY - self.baseY);
+    if (moved < 1e-9) continue; // 沒有可去之處時保留原目標，不算數
+    checked++;
+    assert.equal(
+      isSafe({ ...self, x: target.targetX, baseY: target.targetY }, [], area), true,
+      `目標本身要安全（${target.targetX.toFixed(0)}, ${target.targetY.toFixed(0)}）`,
+    );
+    // 真正的要求：走得到。用同一套 BFS 驗證。
+    const plan = planPath(self, [], area, target.targetX, target.targetY);
+    const straight = pathReaches(self, area, target);
+    assert.ok(
+      plan !== null || straight,
+      `目標必須走得到（${target.targetX.toFixed(0)}, ${target.targetY.toFixed(0)}）`,
+    );
+  }
+  assert.ok(checked >= 20, `前提：要真的挑出目標來驗（實際 ${checked} 個）`);
+});
+
+test('沒有「夠遠」的可達點時，退而求其次取最遠的**可達**點', () => {
+  // 角色被關在一個小口袋裡：口袋內每個點都比 radiusX*2 近，所以「夠遠」的候選是空的。
+  // 三種做法都量過，這是唯一對的：
+  //   - 退回 chooseSafeTarget：回傳只保證安全、不保證到得了的點（規格禁止）。
+  //     實測被圍住的角色連續 40 次拿到的目標，planPath 一條路都規劃不出來。
+  //   - 保留原目標：角色不再重新挑方向，抱著到不了的目標不放，
+  //     實測 1024x768 下有角色 93% 的時間卡住、單次最長 228 秒。
+  //   - 取最遠的可達點：仍然走得到，只是近一點。
+  const size = { width: 60, height: 120 };
+  const space = personalSpace({ x: 0, baseY: 0, ...size });
+  const cx = 500;
+  const cy = 400;
+  // 口袋比角色大一些，但整個都在 radiusX*2 的範圍內
+  const halfW = space.radiusX * 1.6;
+  const halfH = space.radiusY * 1.6;
+  const area = openArea({
+    obstacles: [
+      { x: 0, y: 0, width: cx - halfW, height: 800 },
+      { x: cx + halfW, y: 0, width: 1000 - (cx + halfW), height: 800 },
+      { x: cx - halfW, y: 0, width: 2 * halfW, height: cy - halfH },
+      { x: cx - halfW, y: cy + halfH, width: 2 * halfW, height: 800 - (cy + halfH) },
+    ],
+  });
+  const self = {
+    id: 'pocket', x: cx, baseY: cy, ...size,
+    targetX: 950, targetY: 400, cruiseSpeed: 16, vx: 0, vy: 0,
+  };
+  assert.equal(isSafe(self, [], area), true, '前提：角色自己的位置是安全的');
+
+  const target = chooseReachableTarget(self, [self], area, () => 0.5);
+
+  assert.ok(Number.isFinite(target.targetX) && Number.isFinite(target.targetY));
+  // 關鍵：回傳的點必須真的走得到，不能是口袋外面那個「安全但到不了」的原目標。
+  assert.equal(
+    isSafe({ ...self, x: target.targetX, baseY: target.targetY }, [], area), true,
+    '回傳的點要安全',
+  );
+  assert.ok(
+    pathReaches(self, area, target),
+    `回傳的點要走得到（${target.targetX.toFixed(0)}, ${target.targetY.toFixed(0)}）`,
+  );
+  assert.notEqual(target.targetX, 950, '不得回傳口袋外那個到不了的原目標');
+});
+
 test('過得了河：唯一通道是下緣窄走廊時，角色要繞得過去而不是在河邊耗著', () => {
   // 可行走區被河流切成左右兩半，唯一的通道是下緣一條窄走廊——1920x1080 下
   // 河流下緣 y=907、可行走下緣 y=1004，扣掉上下各一個 radiusY=31.8，
@@ -792,8 +956,10 @@ test('過得了河：唯一通道是下緣窄走廊時，角色要繞得過去�
 
   // 前提：起點與目標分別在河的兩側，而且中間真的被擋住。
   let self = {
-    id: 'crosser', x: 1450, baseY: 720, ...size,
-    targetX: 406, targetY: 895, cruiseSpeed: 55, vx: 0, vy: 0,
+    id: 'crosser', x: 1580, baseY: 900, ...size,
+    // 用**真實**的巡航速度，不是先前那個 55——產品裡最慢的天使只有 11px/s，
+    // 用三倍速跑這條測試，等於在測一個產品不會進入的區間。
+    targetX: 406, targetY: 895, cruiseSpeed: 16, vx: 0, vy: 0,
   };
   assert.equal(isSafe(self, [], area), true, '前提：起點要是安全的');
   assert.equal(

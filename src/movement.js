@@ -25,6 +25,15 @@
   // 門檻用「自由行走距離的比例」而不是固定像素，才不會隨解析度或角色大小失準。
   const PROGRESS_WINDOW_SECONDS = 2;
   const MIN_NET_PROGRESS_FRACTION = 0.15;
+  // 觀察窗內「實際走過的範圍」至少要有自由行走距離的這個比例。
+  //
+  // 只看「離目標近了多少」是不夠的：那個門檻是 0.15 x 速度 x 秒數，在真實速度
+  // （11~27 px/s）下一個兩秒視窗只有 3~8px。任何比這個大一點的來回擺動都會讓
+  // 某些視窗「有進展」而清掉旗標。實測有角色走了自由行走距離的 68%，卻整整
+  // 30 秒沒離開過 1.5x7.8px 的框——比牠自己的腳還小——而 99% 的幀都不是 stalled。
+  //
+  // 走過的範圍不受擺動影響：來回擺 8px 的角色，範圍就是 8px，跟牠走了多少無關。
+  const MIN_SPREAD_FRACTION = 0.35;
   // 距離轉角多近算「走到了」，以足跡半徑為單位。
   const PATH_REACH_FACTOR = 0.6;
   // 一條規劃出來的路，終點至少要有這麼多個「走到了」半徑那麼遠。
@@ -95,9 +104,16 @@
       top: height * 0.60,
       bottom: height * 0.93,
       obstacles: [
-        // 河流：從右上斜切到中央，用兩塊矩形近似它在草地帶內的部分
+        // 河流：從右上斜切到中央，用兩塊矩形近似它在草地帶內的部分。
+        //
+        // 兩塊的**上緣要對齊**。原本下面那塊從 0.70 才開始，於是在
+        // 「上面那塊的右邊、下面那塊的上面、可行走區上緣的下面」夾出一條
+        // 死巷：1280x720 下只有 28px 高，唯一出口是往右穿過一條同樣高的縫。
+        // 實測有角色走進去之後 294 秒出不來——四周 20px 內 0/36 個方向可走，
+        // 而最近的鄰居在 96px 外，也就是說困住牠的是地形不是別人。
+        // 讓兩塊的上緣齊平，那條夾縫就不存在了。
         { x: width * 0.60, y: height * 0.58, width: width * 0.10, height: height * 0.16 },
-        { x: width * 0.63, y: height * 0.70, width: width * 0.14, height: height * 0.14 },
+        { x: width * 0.63, y: height * 0.58, width: width * 0.14, height: height * 0.26 },
         // 前景的兩棵大橄欖樹樹幹：角色不但不該穿過，還會被錯誤地畫在樹前面
         { x: width * 0.05, y: height * 0.62, width: width * 0.11, height: height * 0.30 },
         { x: width * 0.88, y: height * 0.62, width: width * 0.10, height: height * 0.30 },
@@ -634,15 +650,36 @@
 
     const others = characters.filter((character) => character !== self);
     const explored = exploreReachable(self, others, area);
-    if (!explored) return chooseSafeTarget(self, characters, area, random);
 
     // 太近的點不算數——換一個就在腳邊的目標等於沒換。
     const minimum = personalSpace(self).radiusX * 2;
     const candidates = [];
-    for (const node of explored.nodes.values()) {
-      const distance = Math.hypot(node.position.x - self.x, node.position.baseY - self.baseY);
-      if (distance >= minimum) candidates.push(node.position);
+    if (explored) {
+      for (const node of explored.nodes.values()) {
+        const distance = Math.hypot(node.position.x - self.x, node.position.baseY - self.baseY);
+        if (distance >= minimum) candidates.push(node.position);
+      }
     }
+
+    // 沒有「夠遠」的可達點時，退而求其次取**最遠的可達點**——它仍然走得到，
+    // 只是近一點。這比另外兩種做法都好，兩種我都量過：
+    //   - 退回 chooseSafeTarget（原本的寫法）：回傳的正是規格禁止的「只保證安全、
+    //     不保證到得了」的點。實測被圍住的角色連續 40 次拿到的目標，
+    //     planPath 一條路都規劃不出來。
+    //   - 保留原目標：角色不再重新亂挑方向，聽起來乾淨，實際上更糟——它會抱著
+    //     一個到不了的目標不放，實測 1024x768 下有角色 93% 的時間卡住、
+    //     單次最長 228 秒。原本的隨機至少每兩秒換一個方向，還有機會脫困。
+    if (candidates.length === 0 && explored) {
+      let farthest = null;
+      let best = 0;
+      for (const node of explored.nodes.values()) {
+        const distance = Math.hypot(node.position.x - self.x, node.position.baseY - self.baseY);
+        if (distance > best) { best = distance; farthest = node.position; }
+      }
+      if (farthest && best > 1e-6) return { targetX: farthest.x, targetY: farthest.baseY };
+    }
+    // 連一個可達節點都沒有（自己就站在不安全的地方）：交給 chooseSafeTarget，
+    // 它至少會隨機換方向，讓角色有機會被下一次復位帶出去。
     if (candidates.length === 0) return chooseSafeTarget(self, characters, area, random);
 
     const pick = candidates[Math.min(candidates.length - 1, Math.floor(nextRandom(random) * candidates.length))];
@@ -789,11 +826,18 @@
     let anchorGoalX = finite(self.progressGoalX) ? self.progressGoalX : goalX;
     let anchorGoalY = finite(self.progressGoalY) ? self.progressGoalY : goalY;
     let planAttempts = Number.isInteger(self.planAttempts) ? self.planAttempts : 0;
+    // 觀察窗內走過的範圍：記一個錨點與離它最遠的距離，只要兩個數字。
+    let spreadAnchorX = finite(self.spreadAnchorX) ? self.spreadAnchorX : self.x;
+    let spreadAnchorY = finite(self.spreadAnchorY) ? self.spreadAnchorY : self.baseY;
+    let spread = finite(self.spread) ? self.spread : 0;
     if (Math.abs(anchorGoalX - goalX) > 1e-6 || Math.abs(anchorGoalY - goalY) > 1e-6) {
       anchorDistance = distance;
       anchorGoalX = goalX;
       anchorGoalY = goalY;
       progressElapsed = dt;
+      spreadAnchorX = self.x;
+      spreadAnchorY = self.baseY;
+      spread = 0;
     }
     if (distance === 0) {
       // 已經站在目標上：這不是「去不了」，是「到了」。stalled 必須是 false，
@@ -848,6 +892,7 @@
     let avoidHold = Math.max(0, (finite(self.avoidHold) ? self.avoidHold : 0) - dt);
 
     const options = [];
+
     if (threatened) {
       // 認定中的繞行方向優先沿用，而且**不設時限**：只要還在閃避、而且這個方向
       // 還走得通，就一直走下去。設 1.5 秒時限試過，繞不完一個 200px 高的障礙就
@@ -925,10 +970,18 @@
       // 而 stalled 一次都沒回報。
       const cannotMove = velocity.stop === true;
       let stalled = cannotMove;
+      spread = Math.max(spread, Math.hypot(position.x - spreadAnchorX, position.baseY - spreadAnchorY));
+
       if (progressElapsed >= PROGRESS_WINDOW_SECONDS) {
         const now = Math.hypot(goalX - position.x, goalY - position.baseY);
         const freeTravel = self.cruiseSpeed * progressElapsed;
-        if (anchorDistance - now < freeTravel * MIN_NET_PROGRESS_FRACTION) {
+        // 兩個判準取聯集：沒有更接近目標，**或**根本沒離開過原地那一小塊。
+        // 後者抓得到前者抓不到的來回擺動——擺動的淨接近距離可以剛好過關，
+        // 但走過的範圍騙不了人。上限壓在一個足跡半徑：走得比自己還寬就夠了，
+        // 不必要求更多。
+        const spreadNeeded = Math.min(selfSpace.radiusX, freeTravel * MIN_SPREAD_FRACTION);
+        if (spread < spreadNeeded
+          || anchorDistance - now < freeTravel * MIN_NET_PROGRESS_FRACTION) {
           stalled = true;
           // 走不到下一個轉角，這條規劃好的路已經不通了（例如有角色走過來擋住），
           // 丟掉重新規劃，不要抱著一條走不了的路一直撞。
@@ -938,6 +991,9 @@
         }
         anchorDistance = now;
         progressElapsed = 0;
+        spreadAnchorX = position.x;
+        spreadAnchorY = position.baseY;
+        spread = 0;
       }
 
       // 卡住的時候先別急著回報——貪婪避讓走不通，不代表沒有路。
@@ -984,6 +1040,9 @@
         progressGoalX: anchorGoalX,
         progressGoalY: anchorGoalY,
         planAttempts,
+        spreadAnchorX,
+        spreadAnchorY,
+        spread,
       };
     }
 
