@@ -93,9 +93,21 @@
 
   // 腳底越靠近畫面下方＝離觀眾越近＝畫得越大。夾在 [0,1] 之間，
   // 超出可行走區的值不外插，避免角色瞬間爆大或縮成一點。
+  const MIN_DEPTH_SCALE = 0.78;
+  const MAX_DEPTH_SCALE = 1.05;
   function depthScaleForY(baseY, top, bottom) {
     const portion = Math.max(0, Math.min(1, (baseY - top) / (bottom - top || 1)));
-    return Math.round((0.78 + portion * 0.27) * 100) / 100;
+    return Math.round((MIN_DEPTH_SCALE + portion * (MAX_DEPTH_SCALE - MIN_DEPTH_SCALE)) * 100) / 100;
+  }
+
+  // 碰撞用的尺寸：取角色在**最近景**時的大小，跟腳底位置無關。
+  //
+  // 這件事必須跟繪製尺寸分開。繪製尺寸會隨景深變化（越靠畫面下方越大），
+  // 若把它同時當成碰撞尺寸，角色往下走時體積會變大而突然「重疊」，
+  // 於是每一幀都觸發完整的復位搜尋——實測會把畫面直接壓到 8fps。
+  // 用最大值當碰撞尺寸是保守的：出生時檢查過的間距，之後不會因為走動而失效。
+  function collisionSize(image, canvasWidth, canvasHeight) {
+    return displaySize(image, canvasWidth, canvasHeight, MAX_DEPTH_SCALE);
   }
 
   function transitionOpacity(state, elapsed, seconds = 0.4) {
@@ -154,7 +166,10 @@
   }
 
   class Creature {
-    constructor({ artworkId, image, species, canvasWidth, canvasHeight, spawn, isDemo = false }) {
+    constructor({
+      artworkId, image, species, canvasWidth, canvasHeight, spawn, isDemo = false,
+      groundTop, groundBottom,
+    }) {
       this.artworkId = artworkId;
       this.image = image;
       this.species = species;
@@ -171,8 +186,11 @@
       this.sizeScale = swim.sizeScale || 1;
 
       this.isGrounded = this.style === 'walk' || swim.grounded === true;
-      this.groundTop = canvasHeight * 0.45;
-      this.groundBottom = canvasHeight * 0.91;
+      // 景深縮放的參考帶必須跟可行走區一致，否則角色走到帶底時算出的縮放
+      // 會落在區間外（被夾住），近景就不會變大。呼叫端（display.html）傳入
+      // Movement.getWalkableArea 的上下緣；沒傳時用同一組預設值。
+      this.groundTop = groundTop != null ? groundTop : canvasHeight * 0.60;
+      this.groundBottom = groundBottom != null ? groundBottom : canvasHeight * 0.93;
 
       if (spawn) {
         this.x = spawn.x;
@@ -199,16 +217,21 @@
       this.gestureElapsed = 0;
       this.nextGestureAt = 8 + Math.random() * 12;
 
+      const collision = collisionSize(image, canvasWidth, canvasHeight);
+      this.width = collision.width;
+      this.height = collision.height;
       this.refreshSize();
     }
 
+    // width/height 是**碰撞**尺寸，固定不變（移動控制器讀的是這兩個）。
+    // renderWidth/renderHeight 才隨景深變化，只影響畫面。
     refreshSize() {
       const scale = this.isGrounded
         ? depthScaleForY(this.baseY, this.groundTop, this.groundBottom)
         : 1;
       const size = displaySize(this.image, this.canvasWidth, this.canvasHeight, scale);
-      this.width = size.width;
-      this.height = size.height;
+      this.renderWidth = size.width;
+      this.renderHeight = size.height;
     }
 
     setTransition(state) {
@@ -267,14 +290,14 @@
       const legRight = Math.max(legLeft, Math.min(iw, rig.legRight * iw));
       const legTop = Math.max(0, Math.min(ih, rig.legTop * ih));
       const legMiddle = (legLeft + legRight) / 2;
-      const dx = -this.width / 2;
-      const dy = -this.height / 2;
-      const xScale = this.width / iw;
-      const yScale = this.height / ih;
+      const dx = -this.renderWidth / 2;
+      const dy = -this.renderHeight / 2;
+      const xScale = this.renderWidth / iw;
+      const yScale = this.renderHeight / ih;
       const pose = walkPose(t, { freq: this.freq, phase: this.phase, maxAngle: rig.maxAngle });
 
       // 頭、身體、衣袍，以及腿部範圍以外的手杖／羊／魚保持完整。
-      drawImagePart(ctx, image, 0, 0, iw, legTop + 1, dx, dy, this.width, (legTop + 1) * yScale);
+      drawImagePart(ctx, image, 0, 0, iw, legTop + 1, dx, dy, this.renderWidth, (legTop + 1) * yScale);
       drawImagePart(ctx, image, 0, legTop, legLeft + 1, ih - legTop,
         dx, dy + legTop * yScale, (legLeft + 1) * xScale, (ih - legTop) * yScale);
       drawImagePart(ctx, image, legRight - 1, legTop, iw - legRight + 1, ih - legTop,
@@ -310,10 +333,10 @@
       const image = this.image;
       const iw = image.width;
       const ih = image.height;
-      const dx = -this.width / 2;
-      const dy = -this.height / 2;
-      const xScale = this.width / iw;
-      const yScale = this.height / ih;
+      const dx = -this.renderWidth / 2;
+      const dy = -this.renderHeight / 2;
+      const xScale = this.renderWidth / iw;
+      const yScale = this.renderHeight / ih;
 
       const sx = arm.x * iw;
       const sy = arm.y * ih;
@@ -342,8 +365,8 @@
       // 但錨點仍在地面，否則會被排到畫面外、名字也跟著被切掉。
       const hover = grounded ? 0 : this.amplitude;
       const y = grounded
-        ? this.baseY - this.height / 2 + off.footYOffset
-        : this.baseY - this.height / 2 - hover + off.yOffset;
+        ? this.baseY - this.renderHeight / 2 + off.footYOffset
+        : this.baseY - this.renderHeight / 2 - hover + off.yOffset;
       const facingRight = this.vx !== 0 ? this.vx > 0 : this.speed > 0;
       const opacity = this.opacity == null ? 1 : this.opacity;
       if (opacity <= 0) return;
@@ -353,7 +376,7 @@
         ctx.globalAlpha = 0.2 * opacity;
         ctx.fillStyle = '#4c351d';
         ctx.beginPath();
-        ctx.ellipse(this.x, this.baseY + 2, this.width * 0.3, Math.max(3, this.width * 0.055), 0, 0, Math.PI * 2);
+        ctx.ellipse(this.x, this.baseY + 2, this.renderWidth * 0.3, Math.max(3, this.renderWidth * 0.055), 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
       }
@@ -374,13 +397,13 @@
       ctx.save();
       ctx.globalAlpha = 0.18 * opacity;
       for (const offset of [3, 1.5]) {
-        ctx.drawImage(this.image, -this.width / 2 + offset, -this.height / 2 + offset,
-          this.width, this.height);
+        ctx.drawImage(this.image, -this.renderWidth / 2 + offset, -this.renderHeight / 2 + offset,
+          this.renderWidth, this.renderHeight);
       }
       ctx.restore();
 
       if (grounded) this.drawWalkingImage(ctx, t);
-      else ctx.drawImage(this.image, -this.width / 2, -this.height / 2, this.width, this.height);
+      else ctx.drawImage(this.image, -this.renderWidth / 2, -this.renderHeight / 2, this.renderWidth, this.renderHeight);
 
       this.drawArm(ctx, rig.leftArm, pose.leftArmAngle);
       this.drawArm(ctx, rig.rightArm, pose.rightArmAngle);
@@ -389,7 +412,7 @@
       // 規格：角色下方只顯示人物名稱，不顯示動作文字。
       // 名字一律畫在地面錨點下方，漂浮角色也一樣——名字跟著身體浮會讀不穩。
       drawCharacterName(ctx, this.species.name, this.x, this.baseY + 10,
-        Math.max(16, this.width * 0.12), opacity);
+        Math.max(16, this.renderWidth * 0.12), opacity);
     }
   }
 
@@ -399,6 +422,7 @@
     walkPose,
     groundedMotionOffset,
     displaySize,
+    collisionSize,
     depthScaleForY,
     transitionOpacity,
     gesturePose,

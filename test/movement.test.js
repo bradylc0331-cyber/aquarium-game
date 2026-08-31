@@ -126,6 +126,29 @@ test('足跡不得凸出可行走區——上下緣與左右緣用同一套判�
   const resultSpace = personalSpace(result);
   assert.ok(resultSpace.centerY - resultSpace.radiusY >= area.top - 1e-9, '復位後足跡不得凸出上緣');
   assert.ok(resultSpace.centerX - resultSpace.radiusX >= area.left - 1e-9, '復位後足跡不得凸出左緣');
+
+  // 下緣同樣要守住（只測上緣的話，clampPosition 少內縮一邊也抓不到）
+  const belowFloor = character({ x: area.right + 50, baseY: area.bottom + 50 });
+  const floorResult = steerCharacter(belowFloor, [belowFloor], area, 0.1);
+  const floorSpace = personalSpace(floorResult);
+  assert.ok(floorSpace.centerY + floorSpace.radiusY <= area.bottom + 1e-9, '復位後足跡不得凸出下緣');
+  assert.ok(floorSpace.centerX + floorSpace.radiusX <= area.right + 1e-9, '復位後足跡不得凸出右緣');
+});
+
+test('clampPosition 的 y 內縮：起點遠在區外時，夾回來的位置足跡仍完整在區內', () => {
+  // clampPosition 是復位的起點（anchor）。它若沒有內縮 radiusY，anchor 會落在
+  // 足跡凸出上下緣的位置上，導致本來走得到安全點的場景被誤報 blocked。
+  const area = openArea({ top: 100, bottom: 300 });
+  const self = character({ x: 500, baseY: -5000, targetX: 500, targetY: 200 });
+  const space = personalSpace(self);
+
+  const result = steerCharacter(self, [self], area, 0.1);
+
+  assert.equal(result.blocked, false, '空曠場地不該回報 blocked');
+  assert.ok(result.baseY - space.radiusY >= area.top - 1e-9,
+    `夾回來的位置足跡凸出上緣（baseY=${result.baseY}, radiusY=${space.radiusY}）`);
+  assert.ok(result.baseY + space.radiusY <= area.bottom + 1e-9, '夾回來的位置足跡凸出下緣');
+  assert.equal(isSafe(result, [], area), true);
 });
 
 test('地面足跡不隨角色身高改變——高矮角色只要腳的寬度一樣就佔一樣的地', () => {
@@ -195,16 +218,47 @@ test('isSafe 拒絕越界、障礙與角色重疊，且不改動任何輸入', (
   assert.deepEqual({ area, existing, safe }, snapshot);
 });
 
-test('findSafeSpawn 依序探索左、右、下邊緣並只回傳安全出生點', () => {
+test('findSafeSpawn 從靠近邊緣的位置進場，且只回傳安全出生點', () => {
   const area = openArea({ right: 200, bottom: 100 });
   const size = { width: 20, height: 20 };
-  const random = sequence([0.5]);
+  const spawn = findSafeSpawn(size, [], area, sequence([], 0.5));
 
-  const spawn = findSafeSpawn(size, [], area, random);
-
-  assert.deepEqual(spawn, { x: 18.4, baseY: 50 });
+  assert.ok(spawn, '空場地一定要找得到入口');
   assert.equal(isSafe({ ...size, ...spawn }, [], area), true);
-  assert.equal(random.calls(), 1);
+
+  // 「從場景邊緣進入」：出生點要落在靠外圍的一段帶內，不能直接出現在正中央
+  const space = personalSpace({ ...size, ...spawn });
+  const nearLeft = spawn.x - space.radiusX <= area.left + (area.right - area.left) * 0.3;
+  const nearRight = spawn.x + space.radiusX >= area.right - (area.right - area.left) * 0.3;
+  const nearBottom = spawn.baseY + space.radiusY >= area.bottom - (area.bottom - area.top) * 0.5;
+  assert.ok(nearLeft || nearRight || nearBottom, `出生點 ${JSON.stringify(spawn)} 不在邊緣帶內`);
+});
+
+test('障礙壓在邊界線上時，那一整條邊的入口不能整個失效', () => {
+  // 這是實際踩到的坑：前景樹幹貼著畫面左右緣，剛好蓋住原本「單一條出生線」，
+  // 於是左右兩邊的入口 100% 失效，場上永遠湊不滿 15 位。
+  const area = openArea({
+    right: 1000,
+    bottom: 400,
+    obstacles: [
+      { x: 0, y: 0, width: 120, height: 400 },      // 貼著左緣
+      { x: 880, y: 0, width: 120, height: 400 },    // 貼著右緣
+    ],
+  });
+  const size = { width: 40, height: 80 };
+  let seed = 7;
+  const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+
+  const placed = [];
+  for (let i = 0; i < 6; i++) {
+    const spawn = findSafeSpawn(size, placed, area, random);
+    if (!spawn) break;
+    placed.push({ ...size, ...spawn });
+  }
+  assert.ok(placed.length >= 4, `邊緣被障礙壓住時仍應找得到入口，實際只放進 ${placed.length} 位`);
+  for (const c of placed) {
+    assert.equal(isSafe(c, placed.filter((o) => o !== c), area), true);
+  }
 });
 
 test('findSafeSpawn 在 90 次都無安全位置時回傳 null，不縮小角色或容許重疊', () => {
@@ -213,7 +267,7 @@ test('findSafeSpawn 在 90 次都無安全位置時回傳 null，不縮小角色
   const size = { width: 20, height: 20 };
 
   assert.equal(findSafeSpawn(size, [], area, random), null);
-  assert.equal(random.calls(), 90);
+  assert.equal(random.calls(), 180, '90 次嘗試、每次取兩個隨機數');
   assert.deepEqual(size, { width: 20, height: 20 });
 });
 
@@ -408,13 +462,12 @@ function narrowGapArea() {
   };
 }
 
-test('通道入口先被擋住的邊碰到時，不得被永久丟棄（visited 必須在驗證之後才標記）', () => {
-  // 這組幾何是外部審查用隨機搜尋 minimize 出來的：它是目前唯一能區分
-  // 「邊驗證通過才標記 visited」與「先標記再驗證」的形狀。
+test('多障礙夾出的狹道也走得出去，不得誤報 blocked', () => {
+  // 這組幾何是外部審查用隨機搜尋 minimize 出來的窄道案例。
   //
-  // 先標記的版本會把某個節點在被擋住的邊碰到時就丟掉，之後即使有合法的邊
-  // 走得到它也不再展開，於是整條出路消失、誤報 blocked。改動 BFS 記帳順序
-  // 的人如果沒有這個測試，會無聲地把那個 bug 放回來。
+  // 註記：它**不是** `visited.add` 記帳順序的回歸測試。那個順序在目前的
+  // 8-connectivity 下量測不到行為差異（見 src/movement.js 裡的說明），
+  // 沒有任何測試守得住它——之前這個測試的名稱宣稱守得住，是錯的。
   const area = {
     left: 0,
     right: 1179,
@@ -576,7 +629,61 @@ test('薄牆也擋得住：路徑要逐段取樣，不能只檢查每一格的�
   );
 });
 
-test('15 位角色真的進得了場：邊緣入口會隨著角色走開而空出來', () => {
+test('15 位角色真的進得了場——多個 seed 與解析度都要成立，不能靠挑 seed', () => {
+  // 這一條守的是「入口機制」而不是「容量」。容量早就夠（密鋪可放 30 位以上），
+  // 但只要有障礙壓在出生線上（例如前景樹幹貼著畫面左右緣），那一整條邊的入口
+  // 就會 100% 失效，場上永遠湊不滿 15 位，舊角色被淘汰後也補不回來。
+  //
+  // 單一 seed 的測試在這裡沒有意義：實測換 seed 有一半會紅。所以多 seed 多解析度。
+  function fillScene(width, height, seed) {
+    const area = getWalkableArea(width, height);
+    const size = displaySize({ width: 220, height: 400 }, width, height, 1.05);
+    let state = seed;
+    const random = () => { state = (state * 1103515245 + 12345) % 2147483648; return state / 2147483648; };
+    const characters = [];
+    let placed = 0;
+
+    for (let frame = 0; frame < 1200; frame++) { // 20 秒
+      while (placed < 15) {
+        const spawn = findSafeSpawn(size, characters, area, random);
+        if (!spawn) break;
+        characters.push({
+          id: `c${placed}`, ...spawn, ...size,
+          targetX: area.left + random() * (area.right - area.left),
+          targetY: area.top + random() * (area.bottom - area.top),
+          cruiseSpeed: 40 + random() * 30, vx: 0, vy: 0,
+        });
+        placed++;
+      }
+      for (let i = 0; i < characters.length; i++) {
+        characters[i] = steerCharacter(characters[i], characters, area, 1 / 60);
+        const c = characters[i];
+        if (Math.hypot(c.targetX - c.x, c.targetY - c.baseY) < 20) {
+          const target = chooseSafeTarget(c, characters, area, random);
+          characters[i] = { ...c, targetX: target.targetX, targetY: target.targetY };
+        }
+      }
+    }
+    return characters;
+  }
+
+  for (const [width, height] of [[1920, 1080], [1280, 720]]) {
+    for (const seed of [1, 2, 3, 424242, 99999]) {
+      const characters = fillScene(width, height, seed);
+      assert.equal(
+        characters.length, 15,
+        `${width}x${height} seed=${seed}：場上只有 ${characters.length} 位，規格要求 15 位`,
+      );
+      const area = getWalkableArea(width, height);
+      for (const c of characters) {
+        const others = characters.filter((o) => o !== c);
+        assert.equal(isSafe(c, others, area), true, `${width}x${height} seed=${seed}：有角色在不合法位置`);
+      }
+    }
+  }
+});
+
+test('（舊）15 位角色真的進得了場：邊緣入口會隨著角色走開而空出來', () => {
   // 「可行走區塞得下 15 位」是用密鋪證明的，但實際進場只走 findSafeSpawn 的邊緣入口。
   // 一開始邊緣會擠不下，必須確認角色漫遊之後入口會空出來、等待中的作品進得來——
   // 否則場上永遠停在十幾位，規格的 15 位是達不到的。

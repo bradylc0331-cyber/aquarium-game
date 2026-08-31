@@ -3,6 +3,7 @@
 // 規格裡的效能數字必須可以重跑驗證，不能是一次性寫死在文件裡的宣稱。
 // 用法：node scripts/bench-recovery.js
 const Movement = require('../src/movement.js');
+const Creature = require('../src/creature.js');
 
 function stats(samples) {
   const sorted = [...samples].sort((a, b) => a - b);
@@ -67,18 +68,25 @@ console.log('\n=== 正常運行：1920x1080、實際可行走區、15 位角色�
   const area = Movement.getWalkableArea(1920, 1080);
   let seed = 424242;
   const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  // 尺寸要用整合層實際使用的碰撞尺寸，不要寫死——尺寸公式一改，這裡就會失準。
+  const size = Creature.collisionSize({ width: 220, height: 400 }, 1920, 1080);
   const characters = [];
-  for (let i = 0; i < 15; i++) {
-    const size = { width: 211, height: 383 };
-    const spawn = Movement.findSafeSpawn(size, characters, area, random);
-    if (!spawn) break;
-    characters.push({
-      id: `c${i}`, ...spawn, ...size,
-      targetX: area.left + random() * (area.right - area.left),
-      targetY: area.top + random() * (area.bottom - area.top),
-      cruiseSpeed: 40 + random() * 30, vx: 0, vy: 0,
-    });
-  }
+  let placed = 0;
+  // 入口一開始會擠不下，必須跟 display.html 一樣每一幀重試，否則只進得了幾位，
+  // 量到的就不是「15 位在跑」的成本。
+  const trySpawn = () => {
+    while (placed < 15) {
+      const spawn = Movement.findSafeSpawn(size, characters, area, random);
+      if (!spawn) break;
+      characters.push({
+        id: `c${placed}`, ...spawn, ...size,
+        targetX: area.left + random() * (area.right - area.left),
+        targetY: area.top + random() * (area.bottom - area.top),
+        cruiseSpeed: 40 + random() * 30, vx: 0, vy: 0,
+      });
+      placed++;
+    }
+  };
   const dt = 1 / 60;
   const frames = 600;
   const frameMs = [];
@@ -86,6 +94,7 @@ console.log('\n=== 正常運行：1920x1080、實際可行走區、15 位角色�
   let blocked = 0;
   for (let f = 0; f < frames; f++) {
     const started = process.hrtime.bigint();
+    trySpawn();
     for (let i = 0; i < characters.length; i++) {
       const before = characters[i];
       const others = characters.filter((c) => c !== before);
@@ -104,6 +113,6 @@ console.log('\n=== 正常運行：1920x1080、實際可行走區、15 位角色�
     frameMs.push(Number(process.hrtime.bigint() - started) / 1e6);
   }
   const s = stats(frameMs);
-  console.log(`  場上 ${characters.length} 位  每 frame avg ${s.avg.toFixed(3)}ms  ${fmt(s)}  (60fps 預算 16.7ms)`);
+  console.log(`  場上 ${characters.length} 位（目標 15）  每 frame avg ${s.avg.toFixed(3)}ms  ${fmt(s)}  (60fps 預算 16.7ms)`);
   console.log(`  ${frames} frames 內：觸發復位 ${recoveries} 次、回報 blocked ${blocked} 次`);
 }

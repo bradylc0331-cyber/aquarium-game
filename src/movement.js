@@ -207,19 +207,29 @@
     const maxY = area.bottom - dimensions.radiusY;
     const spanY = Math.max(0, maxY - minY);
 
+    // 入口取「靠近邊緣的一條帶」，不是邊界上的單一條線。
+    //
+    // 只取單一條線的話，只要有障礙剛好壓在那條線上（例如前景樹幹貼著畫面左右緣），
+    // 那一整條邊的入口就 100% 失效——實測左右緣各 0/401 個位置可用，於是場上
+    // 永遠湊不滿 15 位，而且舊角色被淘汰後新角色補不進來，人數只會愈來愈少。
+    const spanX = Math.max(0, maxX - minX);
+    const edgeBandX = Math.min(spanX * 0.25, dimensions.radiusX * 6);
+    const edgeBandY = Math.min(spanY * 0.5, dimensions.radiusY * 6);
+
     for (let attempt = 0; attempt < 90; attempt++) {
-      const value = nextRandom(random);
+      const along = nextRandom(random);
+      const inward = nextRandom(random);
       let x;
       let baseY;
       if (attempt % 3 === 0) {
-        x = minX;
-        baseY = minY + value * spanY;
+        x = minX + inward * edgeBandX;
+        baseY = minY + along * spanY;
       } else if (attempt % 3 === 1) {
-        x = maxX;
-        baseY = minY + value * spanY;
+        x = maxX - inward * edgeBandX;
+        baseY = minY + along * spanY;
       } else {
-        x = minX <= maxX ? minX + value * (maxX - minX) : (area.left + area.right) / 2;
-        baseY = maxY;
+        x = minX <= maxX ? minX + along * spanX : (area.left + area.right) / 2;
+        baseY = maxY - inward * edgeBandY;
       }
 
       const candidate = { x, baseY, width: size.width, height: size.height };

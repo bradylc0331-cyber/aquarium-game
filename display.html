@@ -62,7 +62,9 @@
     createCharacter(work) {
       const species = Species.getSpecies(work.speciesId);
       if (!species || !work.image) return null;
-      const size = CreatureModule.displaySize(work.image, canvas.width, canvas.height, 1);
+      // 出生檢查要用**碰撞**尺寸（最近景的大小），不能用某個景深下的繪製尺寸。
+      // 否則角色往下走變大之後就會突然重疊，每一幀都觸發完整復位搜尋。
+      const size = CreatureModule.collisionSize(work.image, canvas.width, canvas.height);
       const spawn = Movement.findSafeSpawn(size, manager.renderable, walkable);
       if (!spawn) return null; // 沒有安全入口就留在 pending 等空間，不縮小也不重疊
       return new CreatureModule.Creature({
@@ -73,10 +75,21 @@
         canvasHeight: canvas.height,
         spawn,
         isDemo: work.isDemo === true,
+        groundTop: walkable.top,
+        groundBottom: walkable.bottom,
       });
     },
   });
   const creatures = manager.renderable;
+
+  // 唯讀的驗收掛勾。Task 8 要能用數字確認「場上幾位、誰被替換掉、還有幾張在等」，
+  // 光靠截圖數人頭數不準（角色會互相遮擋）。只讀不寫，不影響正常流程。
+  window.__bibleDebug = {
+    characterCount: () => manager.renderable.length,
+    artworkIds: () => manager.renderable.map((c) => c.artworkId),
+    pendingCount: () => manager.pendingCount,
+    positions: () => manager.renderable.map((c) => ({ id: c.artworkId, x: c.x, baseY: c.baseY })),
+  };
 
   // 開場先放入幾位暖色調的示範人物，真的掃描結果進來時一樣加進同一個陣列。
   const DEMO_COLORS = {
