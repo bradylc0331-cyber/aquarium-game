@@ -65,7 +65,7 @@
 
 **已完成並驗證過的：**
 
-- 150 條單元測試全綠（`npm test`）。
+- 154 條單元測試全綠（`npm test`）。
 - 掃描管線的端對端合成檢查 14/14（`node scripts/e2e-scan-check.js`）——但那是**合成**
   的影像，不是真的照片。
 - 存檔／還原 14 項檢查（`node scripts/persistence-check.js`）。

@@ -513,6 +513,10 @@
     if (now - lastAutoAlignAt < 650) return;
     lastAutoAlignAt = now;
     const corners = detectCurrentSheetCorners();
+    // 四角在不在，就是紙在不在——這是判斷「作品被拿走了沒」最可靠的訊號，
+    // 跟桌面顏色無關。只在這裡餵，因為只有這裡真的跑過偵測；被節流跳過的
+    // tick 是「這次沒看」，不是「沒看到」，餵下去會讓計數失去意義。
+    autoDetector.noteSheetCheck(Boolean(corners));
     if (!corners) return;
     const firstAlignment = !calibration;
     calibrationFromCorners(corners, false);
