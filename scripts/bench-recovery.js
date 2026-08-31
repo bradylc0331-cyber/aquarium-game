@@ -4,6 +4,17 @@
 // 用法：node scripts/bench-recovery.js
 const Movement = require('../src/movement.js');
 const Creature = require('../src/creature.js');
+const { SPECIES } = require('../src/species.js');
+
+// 產品裡每位人物的實際巡航速度（1080p 下是 11~27 px/s）。
+// 這支腳本先前用 40~70 px/s，是產品永遠不會進入的區間——而卡住偵測的門檻
+// 跟速度成正比，跑太快就會頻繁誤判卡住，同一幀裡塞進本來不會發生的 BFS。
+// 量出來的「正常運行」max 因此在 5.4~41ms 之間跳，其中一次還爆掉 16.7ms 預算，
+// 那不是產品的成本，是這支腳本自己造出來的。
+function realCruiseSpeeds(canvasHeight) {
+  const scale = Creature.speedScaleForCanvas(canvasHeight);
+  return SPECIES.map((s) => (s.swim.speed[0] + s.swim.speed[1]) / 2 * scale);
+}
 
 function stats(samples) {
   const sorted = [...samples].sort((a, b) => a - b);
@@ -67,6 +78,7 @@ console.log('\n=== 正常運行：1920x1080、實際可行走區、15 位角色�
 {
   const area = Movement.getWalkableArea(1920, 1080);
   let seed = 424242;
+  const speeds = realCruiseSpeeds(1080);
   const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
   // 尺寸要用整合層實際使用的碰撞尺寸，不要寫死——尺寸公式一改，這裡就會失準。
   const size = Creature.collisionSize({ width: 220, height: 400 }, 1920, 1080);
@@ -82,7 +94,7 @@ console.log('\n=== 正常運行：1920x1080、實際可行走區、15 位角色�
         id: `c${placed}`, ...spawn, ...size,
         targetX: area.left + random() * (area.right - area.left),
         targetY: area.top + random() * (area.bottom - area.top),
-        cruiseSpeed: 40 + random() * 30, vx: 0, vy: 0,
+        cruiseSpeed: speeds[placed % speeds.length], vx: 0, vy: 0,
       });
       placed++;
     }
@@ -123,13 +135,15 @@ console.log('\n=== 繞路規劃（planPath）：只在偵測到卡住時才跑�
 {
   const area = Movement.getWalkableArea(1920, 1080);
   const size = Creature.collisionSize({ width: 220, height: 400 }, 1920, 1080);
-  // 最貴的情境：目標在河的另一側，必須把整個網格走完才找得到下緣那條窄走廊。
+  // 最貴的情境：目標在場地的另一角，BFS 必須把整個網格走完。
+  // （這裡以前寫「過河」——河已經拿掉了，可行走區現在是一個沒有內部通道問題的
+  //  凸矩形，所以這一列量的是「窮盡網格」的上限成本，不是任何實際會發生的繞路。）
   const crosser = {
     id: 'crosser', x: 1450, baseY: 720, ...size,
-    targetX: 406, targetY: 895, cruiseSpeed: 55, vx: 0, vy: 0,
+    targetX: 406, targetY: 895, cruiseSpeed: realCruiseSpeeds(1080)[0], vx: 0, vy: 0,
   };
   const one = timed(() => Movement.planPath(crosser, [], area, crosser.targetX, crosser.targetY), 20);
-  console.log(`  單次（過河，要窮盡網格）              ${fmt(one)}`);
+  console.log(`  單次（窮盡整個網格）                  ${fmt(one)}`);
 
   // 15 位散開、同一幀全部需要規劃的假想最壞情況。實際上各自的觀察窗是錯開的，
   // 不會同時發生；這裡量的是理論上限。
@@ -149,7 +163,7 @@ console.log('\n=== 挑可到達目標（chooseReachableTarget）：只在角色�
   const size = Creature.collisionSize({ width: 220, height: 400 }, 1920, 1080);
   const self = {
     id: 'picker', x: 1450, baseY: 720, ...size,
-    targetX: 406, targetY: 895, cruiseSpeed: 55, vx: 0, vy: 0,
+    targetX: 406, targetY: 895, cruiseSpeed: realCruiseSpeeds(1080)[0], vx: 0, vy: 0,
   };
   const one = timed(() => Movement.chooseReachableTarget(self, [self], area, Math.random), 20);
   console.log(`  單次                                  ${fmt(one)}`);

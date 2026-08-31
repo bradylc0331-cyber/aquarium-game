@@ -23,7 +23,8 @@ const {
   AVOID_SLOW_SCALE,
   RECOVERY_MAX_NODES,
 } = require('../src/movement.js');
-const { displaySize, speedScaleForCanvas } = require('../src/creature.js');
+const { displaySize, collisionSize, speedScaleForCanvas } = require('../src/creature.js');
+const { groundedSpecies, aspectsOf } = require('./maskAspects.js');
 const { SPECIES } = require('../src/species.js');
 
 // 產品裡每位人物的實際巡航速度（1080p 下是 11~27 px/s）。
@@ -206,21 +207,61 @@ test('地面足跡不隨角色身高改變——高矮角色只要腳的寬度�
   assert.deepEqual(short, tall, '身高不該影響地面足跡，否則高個子會佔掉不合理的地面');
 });
 
-test('可行走區容得下規格要求的 15 位角色', () => {
-  // 這是規格「畫面最多同時顯示 15 位角色」與「安全間距不得互相接觸」能否同時成立的守衛。
-  // 用整個人形當碰撞範圍時一排只塞得下約 10 位，15 位永遠達不到。
-  const area = getWalkableArea(1920, 1080);
-  // 用 Task 4 實際的尺寸公式，不要寫死——尺寸一改就會失去意義
-  const size = displaySize({ width: 220, height: 400 }, 1920, 1080, 1);
+// 貪婪地把角色一個個放進可行走區，回傳最多放得下幾位。
+function packCapacity(area, size, cap) {
   const placed = [];
   for (let baseY = area.top; baseY <= area.bottom; baseY += 6) {
     for (let x = area.left; x <= area.right; x += 6) {
-      if (placed.length >= 15) break;
+      if (placed.length >= cap) return placed.length;
       const candidate = { ...size, x, baseY };
       if (isSafe(candidate, placed, area)) placed.push(candidate);
     }
   }
-  assert.equal(placed.length, 15, `可行走區只放得下 ${placed.length} 位，規格要求 15 位`);
+  return placed.length;
+}
+
+test('可行走區容得下規格要求的 15 位角色——用產品的碰撞尺寸與實際出貨的遮罩比例', () => {
+  // 這是規格「畫面最多同時顯示 15 位角色」與「安全間距不得互相接觸」能否同時成立的守衛。
+  //
+  // 兩個先前的漏洞，都會讓這條測試看到比產品寬鬆的世界：
+  //   1. 尺寸用的是 displaySize(..., 1)，但產品進場用的是 collisionSize（景深上限
+  //      1.05，等於每一邊都再大 5%）。實測 aspect 1.0 時舊寫法看到 14 位、產品其實
+  //      只有 12 位。
+  //   2. 只測一個寫死的 220x400（aspect 0.55），但真正決定容量的是**遮罩裁切後的
+  //      長寬比**，而那是美術檔決定的。實測容量對它非常敏感：
+  //        aspect 0.61 → 35 位   0.80 → 20 位   0.85 → 16 位   0.90 → 14 位   1.00 → 12 位
+  //      也就是 aspect 一旦超過約 0.88，15 位這條規格就直接破了。
+  // 所以這裡改成**從實際出貨的遮罩檔算長寬比**：有人重畫一張比較胖的圖，這條會紅。
+  const area = getWalkableArea(1920, 1080);
+  const grounded = aspectsOf(groundedSpecies());
+  assert.ok(grounded.length > 0, '前提：至少要有一位走地面的人物');
+  const widest = grounded.reduce((worst, one) => (one.aspect > worst.aspect ? one : worst));
+
+  for (const { label, aspect } of [
+    { label: '名目線稿比例 220x400', aspect: 220 / 400 },
+    { label: `實際最寬的走地面遮罩（${widest.id}）`, aspect: widest.aspect },
+  ]) {
+    const size = collisionSize({ width: 400 * aspect, height: 400 }, 1920, 1080);
+    const fits = packCapacity(area, size, 15);
+    assert.equal(
+      fits, 15,
+      `${label}（aspect ${aspect.toFixed(3)}，碰撞尺寸 `
+        + `${size.width.toFixed(0)}x${size.height.toFixed(0)}）只放得下 ${fits} 位，規格要求 15 位。`
+        + `全部走地面人物的長寬比：${grounded.map((g) => `${g.id} ${g.aspect.toFixed(3)}`).join('、')}`,
+    );
+  }
+
+  // 順便把「還有多少餘裕」寫進失敗訊息裡，不要等到哪天破了才回頭查。
+  let cliff = null;
+  for (let aspect = widest.aspect; aspect <= 1.4; aspect += 0.01) {
+    const size = collisionSize({ width: 400 * aspect, height: 400 }, 1920, 1080);
+    if (packCapacity(area, size, 15) < 15) { cliff = aspect; break; }
+  }
+  assert.ok(
+    cliff === null || cliff > widest.aspect + 0.15,
+    `最寬的遮罩 ${widest.id}（${widest.aspect.toFixed(3)}）已經逼近容量懸崖 `
+      + `${cliff === null ? '無' : cliff.toFixed(2)}，餘裕不足 0.15`,
+  );
 });
 
 test('personalSpace 拒絕缺漏、非有限或非正的必要幾何', () => {
@@ -542,7 +583,10 @@ test('長時間運行後角色仍在移動、也還到得了目標，不會整�
   // 五分鐘，不是 90 秒。90 秒會漏掉真正的問題：實測有角色從第 73 秒才開始
   // 卡住、連續困了 59 秒，而 90 秒的測試在第 90 秒就收工，最後 30 秒的視窗
   // 還被前半段的正常移動稀釋掉，看起來完全正常。把 5400 改成 7200 就會紅。
-  const frames = 18000;             // 300 秒
+  // 規格的實機測試要求「長時間運行至少 30 分鐘」。測試預設跑 5 分鐘（CI 跑得完），
+  // 要驗長時間就 RUN_FRAMES=108000（30 分鐘）重跑同一支——指標都是時間無關的，
+  // 拉長不會讓門檻失準。
+  const frames = Number(process.env.RUN_FRAMES || 18000);             // 預設 300 秒
   // 範圍與踱步比值量**整段**，不是最後 30 秒。
   //
   // 切一個視窗來量是脆弱的：切在哪裡會決定看不看得到問題，而且邊緣值會因為
@@ -563,12 +607,20 @@ test('長時間運行後角色仍在移動、也還到得了目標，不會整�
   const MIN_EXTENT_RADII = 1.5;
   // 路徑長 ÷ 走過的範圍：原地踱步的話這個值會很大。
   //
-  // 八組實測的分布是 3.9~11.4，只有一組例外：3840x2160 seed=777777 有一位
-  // 角色是 27.5。查過原因——牠待在河右緣（0.77）與右邊那棵橄欖樹左緣（0.88）
-  // 之間的口袋裡，那塊地扣掉足跡直徑只剩 105px 的活動空間，佔全場安全點的 8%。
-  // 這是**已知的殘留問題，記在這裡而不是把門檻調到看不見**：真正的解法是把
-  // 障礙物對回背景美術（河流在草地帶裡到底佔多寬要重新量），那是另一件事。
-  const MAX_PACING_RATIO = 30;
+  // **一定要在固定長度的視窗裡算，不能拿整段去除。** 路徑長隨時間線性成長，
+  // 但外框會飽和（角色遲早走遍全場），所以整段的比值會隨著測試跑多久而單調上升：
+  // 同一份沒有問題的程式，5 分鐘量到 6.0~10.1、15 分鐘 14.2~21.7、30 分鐘
+  // 28.7~38.3——健康的行為在 30 分鐘就會越過門檻 30。而規格的實機測試要求
+  // 「長時間運行至少 30 分鐘」，等於這個指標在最需要它的長度上會謊報。
+  //
+  // 改成把整段切成固定長度的視窗，各自算比值再取最差的那個視窗。這樣量到的是
+  // 「這一分鐘裡走了多少路、涵蓋多大範圍」，跟整段跑多久無關。
+  const PACING_WINDOW_SECONDS = 60;
+  // 實測（每 60 秒一個視窗，八組解析度×seed，真實速度）：
+  //   5 分鐘  最差 4.4      30 分鐘 最差 5.6
+  // 對照舊的「整段除」指標：5 分鐘 10.1、15 分鐘 21.7、30 分鐘 38.3——那是會隨
+  // 時間單調上升的，這個不會。門檻取 12，對實測最差值有 2.1 倍餘裕。
+  const MAX_PACING_RATIO = 12;
   const MIN_ARRIVED = 10;         // 15 位裡至少幾位抵達過目標
   const MIN_TOTAL_ARRIVALS = 25;
   // 「連續困在小框裡」最多可以持續幾秒，以及全程佔比的上限。
@@ -612,8 +664,8 @@ test('長時間運行後角色仍在移動、也還到得了目標，不會整�
       // 不可達目標，不是實作的問題。
       // 換目標走的是 display.html 用的同一套規則：
       //   - 抵達目標：隨便挑一個安全點就好（便宜）。
-      //   - 回報卡住：要挑一個**走得到**的點。只保證安全的話，河對岸的點會被
-      //     一選再選，角色朝著到不了的地方撞、卡住、再換一個對岸的點，原地打轉。
+      //   - 回報卡住：要挑一個**走得到**的點。只保證安全的話，到不了的點會被
+      //     一選再選，角色朝著到不了的地方撞、卡住、再換一個到不了的點，原地打轉。
       const retarget = (character, crowd, stalled) => ({
         ...character,
         ...(stalled
@@ -622,6 +674,7 @@ test('長時間運行後角色仍在移動、也還到得了目標，不會整�
       });
       const speeds = realCruiseSpeeds(H);
       const extent = new Map();
+      const pacingWindows = new Map();
       const arrivalsPer = new Map();
       const confinement = new Map();
       let worstConfined = { id: null, seconds: 0, at: 0 };
@@ -645,12 +698,19 @@ test('長時間運行後角色仍在移動、也還到得了目標，不會整�
           const next = steerCharacter(before, characters, area, dt);
           characters[i] = { ...before, ...next };
           if (frame >= measureFrom) {
-            const box = extent.get(before.id)
-              || { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity, path: 0 };
-            box.x0 = Math.min(box.x0, next.x); box.x1 = Math.max(box.x1, next.x);
-            box.y0 = Math.min(box.y0, next.baseY); box.y1 = Math.max(box.y1, next.baseY);
-            box.path += Math.hypot(next.x - before.x, next.baseY - before.baseY);
-            extent.set(before.id, box);
+            const step = Math.hypot(next.x - before.x, next.baseY - before.baseY);
+            const accumulate = (map, key) => {
+              const box = map.get(key)
+                || { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity, path: 0 };
+              box.x0 = Math.min(box.x0, next.x); box.x1 = Math.max(box.x1, next.x);
+              box.y0 = Math.min(box.y0, next.baseY); box.y1 = Math.max(box.y1, next.baseY);
+              box.path += step;
+              map.set(key, box);
+            };
+            accumulate(extent, before.id);
+            // 踱步用固定長度的視窗量，不能拿整段除（見 MAX_PACING_RATIO 的說明）。
+            const window = Math.floor((frame - measureFrom) * dt / PACING_WINDOW_SECONDS);
+            accumulate(pacingWindows, `${before.id}|${window}`);
           }
           // 全程盯著「有沒有人被困在原地」。
           //
@@ -725,25 +785,37 @@ test('長時間運行後角色仍在移動、也還到得了目標，不會整�
 
       // 走了很多路卻只在一小塊地方繞，就是踱步。這個比值直接分得開兩種情況：
       // 正常漫遊的角色路徑長跟範圍是同一個量級，踱步的角色路徑長是範圍的幾十倍。
-      const ratios = boxes.map((b, i) => (b ? b.path / Math.max(spans[i], 1) : 0));
+      // 每位角色取**最差的那個視窗**——踱步只要發生過一段就算數，不該被其他
+      // 正常的時段平均掉。
+      const ratios = characters.map((c) => {
+        let worst = 0;
+        for (const [key, box] of pacingWindows) {
+          if (key.slice(0, key.indexOf('|')) !== c.id) continue;
+          const span = Math.hypot(box.x1 - box.x0, box.y1 - box.y0);
+          worst = Math.max(worst, box.path / Math.max(span, 1));
+        }
+        return worst;
+      });
       const pacing = ratios.filter((r) => r > MAX_PACING_RATIO).length;
       assert.equal(
         pacing, 0,
         `${label}：有 ${pacing}/15 位在原地踱步`
-          + `（路徑長÷範圍 ${ratios.map((r) => r.toFixed(1)).join(', ')}）`,
+          + `（每 ${PACING_WINDOW_SECONDS} 秒視窗裡最差的 路徑長÷範圍 `
+          + `${ratios.map((r) => r.toFixed(1)).join(', ')}，門檻 ${MAX_PACING_RATIO}）`,
       );
 
       // 光是「有在動」還不夠——角色要真的抵達得了目標，才代表牠們是朝著目標移動。
-      // 不要求 15 位全部抵達：河流只留下緣一條窄走廊，過河會塞車，某幾位在
-      // 90 秒內排不到很正常（實測最差 12/15）。真正壞掉的版本會遠低於這個數。
+      // 不要求 15 位全部抵達：15 位在同一片草地上會互相擋路，某幾位在整段裡
+      // 排不到很正常（實測最差 12/15）。真正壞掉的版本會遠低於這個數。
+      // （這段註解原本寫「河流只留下緣一條窄走廊」——河已經拿掉了。）
       const arrived = characters.filter((c) => arrivalsPer.get(c.id)).length;
       assert.ok(
         arrived >= MIN_ARRIVED,
-        `${label}：90 秒內只有 ${arrived}/15 位抵達過目標`,
+        `${label}：整段只有 ${arrived}/15 位抵達過目標`,
       );
       assert.ok(
         arrivals >= MIN_TOTAL_ARRIVALS,
-        `${label}：90 秒內全場只抵達目標 ${arrivals} 次，太少`,
+        `${label}：整段全場只抵達目標 ${arrivals} 次，太少`,
       );
     }
   }
@@ -759,7 +831,8 @@ test('貼著邊界又去不了目標時要回報 stalled，不能用被 clamp �
   let self = {
     id: 'edge', x: 900, baseY: area.top + space.radiusY, ...size,
     targetX: 880, targetY: area.top - 400, // 目標在可行走區外的正上方
-    cruiseSpeed: 60, vx: 0, vy: 0,
+    // 速度用產品真的會出現的（見檔案開頭 realCruiseSpeeds 的說明），不要自己編一個。
+    cruiseSpeed: Math.max(...realCruiseSpeeds(1080)), vx: 0, vy: 0,
   };
   assert.equal(isSafe(self, [], area), true, '前提：起點要是安全的');
 
@@ -851,6 +924,50 @@ test('復位、dt=0、已在目標上時 stalled 都要清乾淨，不能殘留'
   assert.equal(recovered.planAttempts, 0, '復位後規劃次數要歸零');
 });
 
+test('復位之後觀察窗的錨點也要跟著搬——不能拿舊位置當基準', () => {
+  // 復位會把角色**搬到別的位置**。觀察窗的兩個錨點（到目標的距離、散開的起點）
+  // 記的都是搬移前的座標，留著會造成兩種相反的錯：
+  //   - 被搬過去的那一段距離會被當成角色自己走出來的進度，掩蓋掉最多一整個
+  //     觀察窗（2 秒）的卡住；
+  //   - 反過來，如果搬移是往目標的反方向，會被當成「這 2 秒沒有進展」而誤報卡住。
+  // 閃避航向同理：那是針對舊位置選的方向。
+  const blocking = openArea({ obstacles: [{ x: 0, y: 0, width: 300, height: 300 }] });
+  const trapped = {
+    id: 'trapped', x: 100, baseY: 100, width: 40, height: 80,
+    targetX: 900, targetY: 700, cruiseSpeed: 100, vx: 0, vy: 0,
+    // 一整包來自舊位置的殘留狀態。
+    progressElapsed: 1.9,
+    progressAnchorDistance: 9999,
+    progressGoalX: 12,
+    progressGoalY: 34,
+    spreadAnchorX: -5000,
+    spreadAnchorY: -5000,
+    spread: 9999,
+    avoidHeadingX: 0.6,
+    avoidHeadingY: 0.8,
+    avoidScale: 0.2,
+    avoidHold: 1.2,
+  };
+  assert.equal(isSafe(trapped, [], blocking), false, '前提：起點必須不安全，才會進入復位');
+
+  const recovered = steerCharacter(trapped, [trapped], blocking, 0.1);
+  assert.ok(
+    Math.hypot(recovered.x - trapped.x, recovered.baseY - trapped.baseY) > 0,
+    '前提：復位要真的把角色搬走，否則這條測試沒有在驗東西',
+  );
+
+  assert.equal(recovered.progressElapsed, 0, '觀察窗要重新開始計時');
+  assert.equal(recovered.progressAnchorDistance, undefined, '到目標的距離錨點要清掉');
+  assert.equal(recovered.progressGoalX, undefined);
+  assert.equal(recovered.progressGoalY, undefined);
+  assert.equal(recovered.spreadAnchorX, recovered.x, '散開的錨點要對齊搬移**後**的位置');
+  assert.equal(recovered.spreadAnchorY, recovered.baseY);
+  assert.equal(recovered.spread, 0);
+  assert.equal(recovered.avoidHeadingX, undefined, '閃避航向是針對舊位置選的，要丟掉');
+  assert.equal(recovered.avoidHeadingY, undefined);
+  assert.equal(recovered.avoidHold, 0);
+});
+
 test('接近邊界時要提前轉向，不是全速撞上去再卡在牆上', () => {
   // 規格：「接近邊界時提前轉向」。
   //
@@ -865,10 +982,14 @@ test('接近邊界時要提前轉向，不是全速撞上去再卡在牆上', ()
   const size = { width: 60, height: 120 };
   const space = personalSpace({ x: 0, baseY: 0, ...size });
   const maxX = area.right - space.radiusX;
+  // 起點要**貼近邊界**。用產品真正的速度（1080p 下最快 27px/s）從 x=200 出發的話，
+  // 30 秒只走得到 x≈1010，根本碰不到 x=1175 的邊界，整條測試會在什麼都沒驗到的
+  // 情況下綠燈——這正是「測試速度不能自己編」的另一面：編快了régime 不對，
+  // 改回真速度就得同時把場景調到真的會發生的距離。
   let self = {
-    id: 'runner', x: 200, baseY: 400, ...size,
+    id: 'runner', x: area.right - space.radiusX - 60, baseY: 400, ...size,
     targetX: 5000, targetY: 400, // 目標遠在區外的正右方
-    cruiseSpeed: 120, vx: 0, vy: 0,
+    cruiseSpeed: Math.max(...realCruiseSpeeds(1080)), vx: 0, vy: 0,
   };
 
   const dt = 1 / 60;
@@ -1567,7 +1688,7 @@ test('15 位角色真的進得了場——多個 seed 與解析度都要成立�
           id: `c${placed}`, ...spawn, ...size,
           targetX: area.left + random() * (area.right - area.left),
           targetY: area.top + random() * (area.bottom - area.top),
-          cruiseSpeed: 40 + random() * 30, vx: 0, vy: 0,
+          cruiseSpeed: realCruiseSpeeds(height)[placed % SPECIES.length], vx: 0, vy: 0,
         });
         placed++;
       }
@@ -1613,24 +1734,42 @@ test('入口擠不下時作品要等得到位子：角色走開後入口才空�
   const size = displaySize({ width: 220, height: 400 }, 1920, 1080, 1.05);
   const space = personalSpace({ x: 0, baseY: 0, ...size });
 
-  // 用 findSafeSpawn 自己把入口塞到滿：一直放，放到它回傳 null 為止。
+  // 用 findSafeSpawn 自己把入口塞到滿：一直放，放到它**連續數次**都回傳 null 為止。
   // 這樣「入口飽和」是由實作自己定義的，不必人工猜哪裡算入口帶。
+  //
+  // 連續數次是必要的：findSafeSpawn 內部是隨機取樣（90 次嘗試），單次失敗只代表
+  // 「這一輪抽樣沒抽到」，不代表真的沒位子。先前這裡是「失敗一次就收工」，
+  // 然後緊接著再呼叫一次當前提斷言——換一組隨機序列就可能抽中，斷言隨機會紅。
+  //
+  // 這條測試一直是靠運氣綠的：把不相干的 cruiseSpeed 換成產品真值（少消耗一次
+  // random），隨機序列一移位，前提就立刻不成立了。30 是量出來的——連續失敗 8 次
+  // 時場上 14 位，再抽 300 次還有 71 次抽得中，根本沒滿；連續失敗 30 次時場上
+  // 19 位，再抽 300 次全部失敗，那才是真的飽和（拉到 100 也還是 19 位，是不動點）。
+  const SATURATED_STREAK = 30;
   const characters = [];
-  while (true) {
+  let misses = 0;
+  while (misses < SATURATED_STREAK) {
     const spawn = findSafeSpawn(size, characters, area, random);
-    if (!spawn) break;
+    if (!spawn) { misses++; continue; }
+    misses = 0;
     characters.push({
       id: `blocker${characters.length}`, ...spawn, ...size,
       targetX: spawn.x, targetY: spawn.baseY,
-      cruiseSpeed: 30 + random() * 20, vx: 0, vy: 0,
+      cruiseSpeed: realCruiseSpeeds(1080)[characters.length % SPECIES.length], vx: 0, vy: 0,
     });
   }
 
   // 前提：真的塞滿了，而且塞進去的數量是合理的（不是一個都放不進去）。
   assert.ok(characters.length >= 5, `前提：入口至少要放得下幾位（實際 ${characters.length}）`);
+  // 前提：角色**不動**的時候一個都進不來。這是整條測試的地基——地基不穩的話，
+  // 後面的「等到位子」就只是在描述隨機抽樣的運氣。
+  let staticAdmissions = 0;
+  for (let attempt = 0; attempt < 300; attempt++) {
+    if (findSafeSpawn(size, characters, area, random)) staticAdmissions++;
+  }
   assert.equal(
-    findSafeSpawn(size, characters, area, random), null,
-    '前提：入口要真的被塞住，才測得到「等位子」',
+    staticAdmissions, 0,
+    `前提：沒有人移動時入口必須完全進不來（300 次抽樣中有 ${staticAdmissions} 次成功）`,
   );
 
   // 把佔住入口的角色叫到場地中央——入口帶就該空出來，等待中的作品才進得來。
@@ -1651,7 +1790,7 @@ test('入口擠不下時作品要等得到位子：角色走開後入口才空�
       characters.push({
         id: `late${admitted}`, ...spawn, ...size,
         targetX: spawn.x, targetY: spawn.baseY,
-        cruiseSpeed: 40 + random() * 30, vx: 0, vy: 0,
+        cruiseSpeed: realCruiseSpeeds(1080)[admitted % SPECIES.length], vx: 0, vy: 0,
       });
       admitted++;
     }
@@ -1799,12 +1938,28 @@ test('recovery 在完全封閉的大場地仍在 frame 預算內結束', () => {
   const area = openArea({ right: 1920, bottom: 1080, obstacles: [{ x: 0, y: 0, width: 1920, height: 1080 }] });
   const self = character({ x: 900, baseY: 540, targetX: 1800, targetY: 1000 });
 
-  const started = process.hrtime.bigint();
   const result = steerCharacter(self, [self], area, 0.1);
-  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
-
   assert.equal(result.blocked, true, '完全封閉時應窮盡搜尋後回報 blocked');
-  assert.ok(elapsedMs < 60, `單一角色最壞情況復位耗時 ${elapsedMs.toFixed(1)}ms，超出可接受範圍`);
+
+  // 真正的保證是**工作量有上界**，那是確定性的：這一趟最多展開整個網格，
+  // 而網格節點數本身有預算上限。時間只是它的副產品。
+  const grid = recoveryGrid(self, area, { x: self.x, baseY: self.baseY });
+  assert.ok(
+    grid.nodeCount <= RECOVERY_MAX_NODES,
+    `最壞情況的網格 ${grid.nodeCount} 個節點，超出預算 ${RECOVERY_MAX_NODES}`,
+  );
+
+  // 時間仍然量，但**先熱身再量**，而且門檻對得起冷熱差。
+  //
+  // 先前這裡是「第一次呼叫就計時、門檻 60ms」。實測冷啟動（JIT 還沒編譯）要
+  // 42.6ms、熱身後 8.4~19ms——1.4 倍的餘裕放在共用機器上，只要旁邊有別的測試
+  // 在跑就會間歇性紅。審查期間就因為兩個**無關的** mutation 各紅了一次，
+  // 單獨重跑都是綠的。那種紅燈沒有資訊量，只會訓練人忽略它。
+  for (let warmup = 0; warmup < 3; warmup++) steerCharacter(self, [self], area, 0.1);
+  const started = process.hrtime.bigint();
+  steerCharacter(self, [self], area, 0.1);
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.ok(elapsedMs < 60, `熱身後單一角色最壞情況復位耗時 ${elapsedMs.toFixed(1)}ms，超出可接受範圍`);
 });
 
 test('blocked 只標記真正無安全點的結果，下一次安全更新會清除 stale marker', () => {

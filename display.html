@@ -71,9 +71,14 @@
       const size = CreatureModule.collisionSize(work.image, canvas.width, canvas.height);
       // 會飛的角色從天空進場，跟地面完全分開；地面擠不擠跟牠無關。
       const flying = !(species.swim.style === 'walk' || species.swim.grounded === true);
+      // 地面的入口只跟**地面角色**擠——飛行角色不算進地面的擁擠度，
+      // 這一條規格在移動迴圈裡有做（walkers/flyers 分開），入口這裡先前漏了：
+      // 傳整個 renderable 進去，等於讓天上的天使去擋地面的入口。
+      // 目前的高度差還蓋得住（天使的 baseY 離最近的地面候選點至少 226px，
+      // 而兩者的 radiusY 加起來只有 78px），但那是碰巧，不是設計。
       const spawn = flying
-        ? Flight.findSkySpawn(size, manager.renderable, sky)
-        : Movement.findSafeSpawn(size, manager.renderable, walkable);
+        ? Flight.findSkySpawn(size, manager.renderable.filter((c) => c.isFlying), sky)
+        : Movement.findSafeSpawn(size, manager.renderable.filter((c) => !c.isFlying), walkable);
       if (!spawn) return null; // 沒有位子就留在 pending 等空間，不縮小也不重疊
       return new CreatureModule.Creature({
         artworkId: work.artworkId,
@@ -309,9 +314,17 @@
         // 回報卡住時要挑一個**走得到**的目標。只保證安全的話，河對岸的點會被
         // 一選再選，角色朝著到不了的地方撞、卡住、再換一個對岸的點，原地打轉。
         // 抵達目標時用便宜的那個就好，不必每次都跑一趟 BFS。
-        const target = character.stalled
+        let target = character.stalled
           ? Movement.chooseReachableTarget(character, walkers, walkable)
           : Movement.chooseSafeTarget(character, walkers, walkable);
+        // chooseSafeTarget 連續挑不到點時會退回「原地」。那等於沒有目標：
+        // 下一幀又判定「抵達」、又挑一次，角色靜止不動，而 blocked 與 stalled
+        // 都是 false——兩個處理分支都看不到牠，牠會靜止到活動結束。
+        // 挑不到就當成卡住，改用會繞路的那一個。
+        const sameSpot = Math.hypot(target.targetX - character.x, target.targetY - character.baseY) < 1e-6;
+        if (sameSpot && !character.stalled) {
+          target = Movement.chooseReachableTarget(character, walkers, walkable);
+        }
         character.targetX = target.targetX;
         character.targetY = target.targetY;
       }

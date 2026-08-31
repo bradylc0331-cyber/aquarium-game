@@ -495,6 +495,12 @@
     // 的處境算出來的，必須一併清掉。只重設 blocked 的話，剛復位的角色會帶著
     // 一個殘留的 stalled=true 出去，整合層每一幀都重新挑目標（一次最多 60 次
     // isSafe 探測），而且會照著一條從舊位置規劃的路走。
+    //
+    // 同一個理由適用於**觀察窗**的那幾個錨點：progressAnchorDistance 記的是搬移前
+    // 到目標的距離、spreadAnchor 記的是搬移前的位置。留著的話，下一個觀察窗會把
+    // 「被搬過去」的那一段當成角色自己走出來的進度（最多掩蓋掉 2 秒的卡住），
+    // 或反過來把搬移算成沒有進展而誤報卡住。閃避航向也是針對舊位置選的方向。
+    // 先前只清了一半，是漏的不是刻意的。
     const resultAt = (position) => ({
       ...self,
       x: position.x,
@@ -507,6 +513,19 @@
       pathGoalX: undefined,
       pathGoalY: undefined,
       planAttempts: 0,
+      // 觀察窗整個重新開始，錨點對齊搬移**後**的位置。
+      progressElapsed: 0,
+      progressAnchorDistance: undefined,
+      progressGoalX: undefined,
+      progressGoalY: undefined,
+      spreadAnchorX: position.x,
+      spreadAnchorY: position.baseY,
+      spread: 0,
+      // 閃避航向是針對舊位置選的，搬走之後沒有意義。
+      avoidHeadingX: undefined,
+      avoidHeadingY: undefined,
+      avoidScale: undefined,
+      avoidHold: 0,
     });
     if (isSafe({ ...self, x: anchor.x, baseY: anchor.baseY }, others, area)) return resultAt(anchor);
 
