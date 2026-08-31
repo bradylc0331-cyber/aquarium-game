@@ -196,9 +196,33 @@
     ctx.restore();
   }
 
+  const SHEEP_X_RATIOS = [0.10, 0.27, 0.42, 0.59, 0.75, 0.90];
+  const SHEEP_Y_RATIOS = [0.84, 0.78, 0.86, 0.76, 0.83, 0.79];
+
+  function sheepScaleForY(baseY, top, bottom) {
+    const span = Math.max(1, bottom - top);
+    const depth = Math.max(0, Math.min(1, (baseY - top) / span));
+    return 0.72 + depth * 0.33;
+  }
+
+  function createSheepFlock(w, h, random = Math.random) {
+    return SHEEP_X_RATIOS.map((nx, i) => ({
+      kind: 'sheep',
+      x: w * nx,
+      baseY: h * SHEEP_Y_RATIOS[i],
+      direction: i % 2 === 0 ? 1 : -1,
+      speed: 8 + random() * 8,
+      mode: i % 3 === 0 ? 'grazing' : 'walking',
+      modeTime: i % 3 === 0 ? 2 + random() * 3 : 5 + random() * 6,
+      width: 78,
+      height: 58,
+      phase: i * 1.17,
+    }));
+  }
+
   const api = {
     createBubbles, updateBubbles, drawBubbles, drawBackground, drawRiverFlow, drawForeground,
-    gustStrength, drawCanopySway,
+    gustStrength, drawCanopySway, createSheepFlock, sheepScaleForY,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.AquariumScene = api;

@@ -1,6 +1,14 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createBubbles, updateBubbles, drawBubbles, drawBackground, drawForeground } = require('../src/scene.js');
+const {
+  createBubbles,
+  updateBubbles,
+  drawBubbles,
+  drawBackground,
+  drawForeground,
+  createSheepFlock,
+  sheepScaleForY,
+} = require('../src/scene.js');
 
 // 用 Proxy 假裝一個 CanvasRenderingContext2D：任何方法呼叫都是 no-op，
 // 任何屬性讀寫都直接接受。目的不是驗證畫面長怎樣（那要真的瀏覽器），
@@ -57,4 +65,22 @@ test('陣風強度平滑且限制在 0 到 1', () => {
 test('樹冠微風覆層畫得出來', () => {
   const { ctx } = makeFakeCtx();
   assert.doesNotThrow(() => drawCanopySway(ctx, 1600, 900, 2));
+});
+
+test('羊群固定六隻、橫向展開，而且每一隻都站在可行走草地內', () => {
+  const area = { left: 40, right: 960, top: 600, bottom: 930 };
+  const flock = createSheepFlock(1000, 1000, () => 0.5);
+  assert.equal(flock.length, 6);
+  assert.ok(flock.every((sheep) => sheep.x >= area.left && sheep.x <= area.right));
+  assert.ok(flock.every((sheep) => sheep.baseY >= area.top && sheep.baseY <= area.bottom));
+  const sortedX = flock.map((sheep) => sheep.x).sort((a, b) => a - b);
+  assert.ok(sortedX[5] - sortedX[0] > 700, '六隻羊必須橫跨大部分草地');
+});
+
+test('羊越靠近畫面下方越大，而且景深縮放沒有跳階', () => {
+  const samples = [600, 650, 700, 750, 800, 850, 900].map((y) => sheepScaleForY(y, 600, 930));
+  for (let i = 1; i < samples.length; i++) {
+    assert.ok(samples[i] > samples[i - 1]);
+    assert.ok(samples[i] - samples[i - 1] < 0.1, '相鄰深度不能突然放大');
+  }
 });
