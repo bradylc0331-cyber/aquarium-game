@@ -35,9 +35,10 @@
 Git 狀態：
 
 ```text
-branch: feature/2-5d-character-motion
-main baseline: dbb5cda
-current implementation HEAD before this handoff: 9299c41
+branch: 2-5d-character-motion
+remote main baseline: 0c0a7bb
+latest source snapshot on remote branch: 2234c50
+current implementation HEAD before this handoff: 46d98a0
 ```
 
 原始 repository 是由壓縮檔初始化而來：
@@ -59,8 +60,8 @@ current implementation HEAD before this handoff: 9299c41
 Commits：
 
 ```text
-a8086c8 feat: add stable scanned artwork identity
-ca7d8c2 test: protect scanned artwork submission identity
+9d5d553 feat: add stable scanned artwork identity
+485cb12 test: protect scanned artwork submission identity
 ```
 
 完成內容：
@@ -77,8 +78,8 @@ ca7d8c2 test: protect scanned artwork submission identity
 Commits：
 
 ```text
-7fb7515 feat: enforce fifteen-character FIFO
-e06d8b8 fix: validate character manager configuration
+86e43c3 feat: enforce fifteen-character FIFO
+54ca618 fix: validate character manager configuration
 ```
 
 完成內容：
@@ -97,9 +98,9 @@ e06d8b8 fix: validate character manager configuration
 Commits：
 
 ```text
-2e1846d feat: add safe roaming and collision avoidance
-328c64f fix: recover characters from unsafe positions
-9299c41 fix: keep recovery outputs finite and unblocked
+3123b6c feat: add safe roaming and collision avoidance
+b517a87 fix: recover characters from unsafe positions
+46d98a0 fix: keep recovery outputs finite and unblocked
 ```
 
 `src/movement.js` 現有功能：
