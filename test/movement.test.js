@@ -16,6 +16,9 @@ const {
   recoveryGrid,
   segmentSampleStep,
   NEIGHBOR_OFFSETS,
+  EDGE_BAND_RADII,
+  VERTICAL_SPEED_FACTOR,
+  RECOVERY_MAX_NODES,
 } = require('../src/movement.js');
 const { displaySize } = require('../src/creature.js');
 
@@ -228,12 +231,38 @@ test('findSafeSpawn 從靠近邊緣的位置進場，且只回傳安全出生點
   assert.ok(spawn, '空場地一定要找得到入口');
   assert.equal(isSafe({ ...size, ...spawn }, [], area), true);
 
-  // 「從場景邊緣進入」：出生點要落在靠外圍的一段帶內，不能直接出現在正中央
-  const space = personalSpace({ ...size, ...spawn });
-  const nearLeft = spawn.x - space.radiusX <= area.left + (area.right - area.left) * 0.3;
-  const nearRight = spawn.x + space.radiusX >= area.right - (area.right - area.left) * 0.3;
-  const nearBottom = spawn.baseY + space.radiusY >= area.bottom - (area.bottom - area.top) * 0.5;
-  assert.ok(nearLeft || nearRight || nearBottom, `出生點 ${JSON.stringify(spawn)} 不在邊緣帶內`);
+  // 「從場景邊緣進入」要用**絕對尺度**驗，不能拿實作自己的比例當門檻。
+  // 舊寫法是 `x - radiusX <= left + 0.30 * 寬` 對上實作的 0.25 倍帶寬，代數上
+  // 恆真；下緣那條 0.5 對 0.5 更是永遠成立。結果把入口帶整個換成全場（等於
+  // 完全沒有邊緣行為）測試照樣全綠。
+  //
+  // 改成量「離最近邊界有幾個自己的足跡半徑」，並且同時釘住那個倍數本身很小。
+  // 兩條合起來才擋得住「把帶放寬到整個場地」這種改動。
+  assert.ok(EDGE_BAND_RADII <= 4, `入口帶不得超過 4 個足跡半徑（目前 ${EDGE_BAND_RADII}）`);
+
+  for (const [W, H] of [[1920, 1080], [1280, 720], [3840, 2160], [800, 600]]) {
+    const walkable = getWalkableArea(W, H);
+    const walkableSize = displaySize({ width: 220, height: 400 }, W, H, 1.05);
+    const space = personalSpace({ x: 0, baseY: 0, ...walkableSize });
+    let seed = 5;
+    const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+
+    for (let i = 0; i < 400; i++) {
+      const point = findSafeSpawn(walkableSize, [], walkable, random);
+      assert.ok(point, `${W}x${H}：空場地一定要找得到入口`);
+      // 四個方向各自換算成「幾個足跡半徑」，取最近的那一邊。
+      const radii = Math.min(
+        (point.x - space.radiusX - walkable.left) / space.radiusX,
+        (walkable.right - space.radiusX - point.x) / space.radiusX,
+        (point.baseY - space.radiusY - walkable.top) / space.radiusY,
+        (walkable.bottom - space.radiusY - point.baseY) / space.radiusY,
+      );
+      assert.ok(
+        radii <= EDGE_BAND_RADII + 1e-9,
+        `${W}x${H}：出生點離最近邊界 ${radii.toFixed(2)} 個足跡半徑，超出入口帶`,
+      );
+    }
+  }
 });
 
 test('障礙壓在邊界線上時，那一整條邊的入口不能整個失效', () => {
@@ -305,7 +334,18 @@ test('steerCharacter 朝目標產生速度，垂直地面移動較慢且不改�
 
   assert.ok(result.x > self.x);
   assert.ok(result.baseY > self.baseY);
+  // 舊寫法只斷言 |vy| < |vx|。這個場景的 dx 與 dy 相等，所以把 VERTICAL_SPEED_FACTOR
+  // 改成 1、垂直完全不減速，兩者仍差 5.7e-13（純浮點抵消誤差），斷言照樣成立。
+  // 要驗的是**比例**：dx 與 dy 相等時，vy/vx 必須正好等於那個係數。
   assert.ok(Math.abs(result.vy) < Math.abs(result.vx));
+  // 兩條缺一不可。只比對 vy/vx 與匯入的常數是自我循環的——改常數會同時改動
+  // 斷言的兩邊，係數設成 1（垂直完全不減速）照樣會過。所以先獨立釘住
+  // 「這個係數必須小於 1」，再確認它真的被套用了。
+  assert.ok(VERTICAL_SPEED_FACTOR < 1, '垂直移動必須比水平慢');
+  assert.ok(
+    Math.abs(Math.abs(result.vy / result.vx) - VERTICAL_SPEED_FACTOR) < 1e-9,
+    `vy/vx 應為 ${VERTICAL_SPEED_FACTOR}，實際 ${Math.abs(result.vy / result.vx)}`,
+  );
   assert.ok(['x', 'baseY', 'vx', 'vy'].every((key) => Number.isFinite(result[key])));
   assert.notEqual(result, self);
   assert.deepEqual({ self, characters }, snapshot);
@@ -661,9 +701,44 @@ test('recovery 走得過窄縫，能離開起點所在的大障礙', () => {
   assert.equal(result.blocked, false, '縫是走得過去的，不得回報 blocked');
   assert.equal(isSafe(result, [], area), true);
   // BFS 取的是最近的安全節點，所以正確答案是「站在縫裡」而不是「衝到牆右側」。
-  // 關鍵是它必須離開起點所在的大障礙、進到縫的位置，代表通道沒有被丟棄。
-  assert.ok(result.x > 400, `應該走進縫的位置，實際落在 x=${result.x}`);
+  //
+  // 舊寫法斷言 `result.x > 400`，但這一格場地裡任何安全點的 x 最小就是
+  // 400 + radiusX = 426.8，所以只要結果是安全的就必然成立——等於沒有斷言。
+  // 改成跟窮舉出來的**真正最近安全點**比對距離，這才是規格說的「取最近的」。
+  const space = personalSpace(self);
+  let nearest = null;
+  for (let x = 0; x <= 1000; x += 2) {
+    for (let baseY = 0; baseY <= 800; baseY += 2) {
+      if (!isSafe({ ...self, x, baseY }, [], area)) continue;
+      const distance = Math.hypot(x - self.x, baseY - self.baseY);
+      if (!nearest || distance < nearest.distance) nearest = { x, baseY, distance };
+    }
+  }
+  assert.ok(nearest, '前提：這個場地要真的存在安全點');
+
+  const achieved = Math.hypot(result.x - self.x, result.baseY - self.baseY);
+  // 有限解析度的網格取不到連續空間的最佳解，容差抓一個格步長。
+  const tolerance = Math.max(space.radiusX, space.radiusY) * 2;
+  assert.ok(
+    achieved <= nearest.distance + tolerance,
+    `復位應取最近的安全點：窮舉最近 ${nearest.distance.toFixed(1)}px`
+      + `（${nearest.x}, ${nearest.baseY}），實際跑了 ${achieved.toFixed(1)}px`,
+  );
   assert.ok(result.baseY > 93 && result.baseY < 250, `應該落在縫的高度，實際 baseY=${result.baseY}`);
+});
+
+test('已經安全但被 clamp 過的角色要留在原地，不得被推開一格', () => {
+  // 規格：復位取的是**最近**的安全點。角色已經安全時，最近的安全點就是牠自己。
+  // 少了「anchor 本身安全就直接回傳」這一步，角色會被推到網格上的鄰近節點——
+  // 位置合法，但每次觸發都平白位移一格。
+  const area = openArea();
+  const self = character({ x: 500, baseY: 400, targetX: 500, targetY: 400 });
+  assert.equal(isSafe(self, [], area), true, '前提：起點要是安全的');
+
+  const result = steerCharacter(self, [self], area, 0.1);
+
+  assert.equal(result.x, self.x);
+  assert.equal(result.baseY, self.baseY);
 });
 
 test('recovery 繞行時起點必須不安全，且回傳點是經合法路徑可達的', () => {
@@ -961,41 +1036,77 @@ test('15 位角色真的進得了場——多個 seed 與解析度都要成立�
   }
 });
 
-test('（舊）15 位角色真的進得了場：邊緣入口會隨著角色走開而空出來', () => {
-  // 「可行走區塞得下 15 位」是用密鋪證明的，但實際進場只走 findSafeSpawn 的邊緣入口。
-  // 一開始邊緣會擠不下，必須確認角色漫遊之後入口會空出來、等待中的作品進得來——
-  // 否則場上永遠停在十幾位，規格的 15 位是達不到的。
+test('入口擠不下時作品要等得到位子：角色走開後入口才空出來', () => {
+  // 規格的驗收條目是「邊緣入口一開始擠不下，但角色漫遊後入口會空出來，
+  // 等待中的作品陸續進場」。
+  //
+  // 舊版測試證不到這件事：實測它的場景在 frame 0 就進了 14 位、frame 1 就滿 15 位，
+  // 入口從來沒擠過，`fullAtFrame < 900` 這個斷言不可能失敗（全掃 60 組最慢也只有
+  // frame 25）。這裡改成先用一排靜止的「路障角色」把入口帶塞住，讓前幾位真的
+  // 進不來，再確認牠們最終等到位子。
   const area = getWalkableArea(1920, 1080);
   let seed = 20260831;
   const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
-  const size = displaySize({ width: 220, height: 400 }, 1920, 1080, 1);
-  const characters = [];
-  let placed = 0;
-  let fullAtFrame = null;
+  const size = displaySize({ width: 220, height: 400 }, 1920, 1080, 1.05);
+  const space = personalSpace({ x: 0, baseY: 0, ...size });
 
-  for (let frame = 0; frame < 1200; frame++) { // 20 秒
-    while (placed < 15) {
+  // 用 findSafeSpawn 自己把入口塞到滿：一直放，放到它回傳 null 為止。
+  // 這樣「入口飽和」是由實作自己定義的，不必人工猜哪裡算入口帶。
+  const characters = [];
+  while (true) {
+    const spawn = findSafeSpawn(size, characters, area, random);
+    if (!spawn) break;
+    characters.push({
+      id: `blocker${characters.length}`, ...spawn, ...size,
+      targetX: spawn.x, targetY: spawn.baseY,
+      cruiseSpeed: 30 + random() * 20, vx: 0, vy: 0,
+    });
+  }
+
+  // 前提：真的塞滿了，而且塞進去的數量是合理的（不是一個都放不進去）。
+  assert.ok(characters.length >= 5, `前提：入口至少要放得下幾位（實際 ${characters.length}）`);
+  assert.equal(
+    findSafeSpawn(size, characters, area, random), null,
+    '前提：入口要真的被塞住，才測得到「等位子」',
+  );
+
+  // 把佔住入口的角色叫到場地中央——入口帶就該空出來，等待中的作品才進得來。
+  const centerX = (area.left + area.right) / 2;
+  const centerY = (area.top + area.bottom) / 2;
+  for (const character of characters) {
+    character.targetX = centerX;
+    character.targetY = centerY;
+  }
+
+  let admitted = 0;
+  let firstAdmissionFrame = null;
+  for (let frame = 0; frame < 1800; frame++) {
+    while (admitted < 5) {
       const spawn = findSafeSpawn(size, characters, area, random);
       if (!spawn) break;
+      if (firstAdmissionFrame === null) firstAdmissionFrame = frame;
       characters.push({
-        id: `c${placed}`, ...spawn, ...size,
-        targetX: area.left + random() * (area.right - area.left),
-        targetY: area.top + random() * (area.bottom - area.top),
+        id: `late${admitted}`, ...spawn, ...size,
+        targetX: spawn.x, targetY: spawn.baseY,
         cruiseSpeed: 40 + random() * 30, vx: 0, vy: 0,
       });
-      placed++;
+      admitted++;
     }
-    if (placed === 15 && fullAtFrame === null) fullAtFrame = frame;
     for (let i = 0; i < characters.length; i++) {
-      characters[i] = steerCharacter(characters[i], characters, area, 1 / 60);
+      const next = steerCharacter(characters[i], characters, area, 1 / 60);
+      characters[i] = { ...characters[i], ...next };
+      if (next.stalled) {
+        characters[i] = { ...characters[i], ...chooseSafeTarget(characters[i], characters, area, random) };
+      }
     }
   }
 
-  assert.equal(characters.length, 15, `場上只有 ${characters.length} 位，規格要求 15 位`);
-  assert.ok(fullAtFrame !== null && fullAtFrame < 900, `太久才滿員（frame ${fullAtFrame}）`);
-  for (let i = 0; i < characters.length; i++) {
-    const others = characters.filter((c) => c !== characters[i]);
-    assert.equal(isSafe(characters[i], others, area), true, `第 ${i} 位跑到不合法的位置`);
+  assert.ok(firstAdmissionFrame !== null && firstAdmissionFrame > 0,
+    '前提：第一位必須是「等了一段時間」才進得來，不能第 0 幀就進場');
+  assert.equal(admitted, 5, `等待中的作品只進了 ${admitted}/5 位，入口沒有空出來`);
+  for (const character of characters) {
+    const others = characters.filter((c) => c !== character);
+    assert.equal(isSafe(character, others, area), true, `${character.id} 跑到不合法的位置`);
   }
 });
 
@@ -1015,14 +1126,23 @@ test('recovery 的搜尋空間有限：兩軸步長比例跟足跡一致，節�
       Math.abs(stepRatio - radiusRatio) < 1e-6,
       `width=${width}：步長比 ${stepRatio.toFixed(3)} 應等於半徑比 ${radiusRatio.toFixed(3)}`,
     );
-    assert.ok(grid.nodeCount <= 6000, `width=${width}：節點數 ${grid.nodeCount} 超出預算`);
+    assert.ok(grid.nodeCount <= RECOVERY_MAX_NODES, `width=${width}：節點數 ${grid.nodeCount} 超出預算`);
+
+    // 解析度必須比足跡細，否則整個足跡塞得進兩個格點之間，只有角色寬度的
+    // 縫隙就會被當成走不過去（實測把步長放粗 4 倍，一組 61 個連續空間裡確實
+    // 走得過的縫隙，誤報 blocked 從 32 個增加到 50 個）。
+    assert.ok(
+      grid.stepX < 2 * space.radiusX && grid.stepY < 2 * space.radiusY,
+      `width=${width}：步長 ${grid.stepX.toFixed(1)}/${grid.stepY.toFixed(1)}`
+        + ` 必須細於足跡直徑 ${(2 * space.radiusX).toFixed(1)}/${(2 * space.radiusY).toFixed(1)}`,
+    );
   }
 
   // 大畫面配極小角色：純看角色半徑會讓節點數爆炸，必須自動放粗步長
   const tiny = character({ width: 6, height: 10 });
   const hugeArea = openArea({ right: 4000, bottom: 3000 });
   const tinyGrid = recoveryGrid(tiny, hugeArea, { x: 2000, baseY: 1500 });
-  assert.ok(tinyGrid.nodeCount <= 6000, `節點數 ${tinyGrid.nodeCount} 超出預算`);
+  assert.ok(tinyGrid.nodeCount <= RECOVERY_MAX_NODES, `節點數 ${tinyGrid.nodeCount} 超出預算`);
   assert.ok(
     tinyGrid.stepX > recoveryGrid(tiny, openArea(), anchor).stepX,
     '大場地時步長要放粗',

@@ -31,6 +31,12 @@
 
   // 復位搜尋（recoverSafePosition）的有限搜尋空間定義。
   // 步長取角色安全橢圓短半徑的一半：夠細，鑽得過只有角色寬度的縫隙。
+  // 出生入口帶的寬度。兩軸都不得超過角色自己足跡半徑的這個倍數——
+  // 這是絕對尺度，換解析度不會讓「邊緣」悄悄膨脹成半個場地。
+  const EDGE_BAND_RADII = 4;
+  const EDGE_BAND_SPAN_FRACTION_X = 0.20;
+  const EDGE_BAND_SPAN_FRACTION_Y = 0.30;
+
   const RECOVERY_STEP_FACTOR = 0.5;
   // 步長下限，避免極小角色算出趨近 0 的步長讓網格爆炸。抬升時兩軸等比，
   // 上限則交給節點預算與 RECOVERY_ABSOLUTE_MAX_STEP，不另設固定天花板——
@@ -229,9 +235,16 @@
     // 只取單一條線的話，只要有障礙剛好壓在那條線上（例如前景樹幹貼著畫面左右緣），
     // 那一整條邊的入口就 100% 失效——實測左右緣各 0/401 個位置可用，於是場上
     // 永遠湊不滿 15 位，而且舊角色被淘汰後新角色補不進來，人數只會愈來愈少。
+    //
+    // 但帶也不能寬到失去「邊緣」的意義。原本 Y 取 spanY 的一半，等於整個下半場
+    // 都算「從下緣進場」——1920x1080 下量到出生點可以離最近的邊界 178px，剛好是
+    // 可行走區高度的正中央線。現在兩軸都壓在**角色自己足跡半徑的 4 倍**以內，
+    // 這是個絕對尺度（跟畫面大小無關），也才配得上「從場景邊緣進入」的說法。
+    // 代價是滿場慢一點（實測最慢 86 frame ≈ 1.4 秒，原本 7 frame），
+    // 而那正好就是規格描述的「入口一開始擠不下、角色走開後才空出來」。
     const spanX = Math.max(0, maxX - minX);
-    const edgeBandX = Math.min(spanX * 0.25, dimensions.radiusX * 6);
-    const edgeBandY = Math.min(spanY * 0.5, dimensions.radiusY * 6);
+    const edgeBandX = Math.min(spanX * EDGE_BAND_SPAN_FRACTION_X, dimensions.radiusX * EDGE_BAND_RADII);
+    const edgeBandY = Math.min(spanY * EDGE_BAND_SPAN_FRACTION_Y, dimensions.radiusY * EDGE_BAND_RADII);
 
     for (let attempt = 0; attempt < 90; attempt++) {
       const along = nextRandom(random);
@@ -677,6 +690,9 @@
     // 以下匯出給測試釘住規格明文要求的性質；正式流程不需要直接呼叫。
     recoveryGrid,
     segmentSampleStep,
+    EDGE_BAND_RADII,
+    VERTICAL_SPEED_FACTOR,
+    RECOVERY_MAX_NODES,
     NEIGHBOR_OFFSETS,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
