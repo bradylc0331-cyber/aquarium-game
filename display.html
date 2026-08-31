@@ -97,6 +97,14 @@
     artworkIds: () => manager.renderable.map((c) => c.artworkId),
     pendingCount: () => manager.pendingCount,
     positions: () => manager.renderable.map((c) => ({ id: c.artworkId, x: c.x, baseY: c.baseY })),
+    // 飛行角色要能單獨檢查：截圖看不出「頭頂被畫面上緣切掉幾像素」，
+    // 也看不出天使到底有沒有在飄——牠飄得慢，兩張相隔很久的截圖看起來會一樣。
+    flyers: () => manager.renderable.filter((c) => c.isFlying).map((c) => ({
+      id: c.artworkId, x: c.x, baseY: c.baseY,
+      renderHeight: c.renderHeight, amplitude: c.amplitude,
+      driftDirection: c.driftDirection,
+      spriteTop: c.baseY - c.renderHeight - c.amplitude,
+    })),
     // 存檔狀態：驗收要能分辨「沒存進去」與「存了但沒還原」。
     storeAvailable: () => store.available,
     savedCount: () => store.loadAll().then((records) => records.length),

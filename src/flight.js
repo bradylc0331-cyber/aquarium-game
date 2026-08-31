@@ -9,8 +9,8 @@
 (function (root) {
   // 天空帶：上緣留一點邊不要貼著畫面頂端，下緣停在可行走區上緣之上，
   // 免得天使飄到一半又跟地面角色重疊。
-  const SKY_TOP = 0.06;
-  const SKY_BOTTOM = 0.42;
+  const SKY_TOP = 0.03;
+  const SKY_BOTTOM = 0.50;
   // 飄移速度相對於角色巡航速度的比例。天使是飄的，不是走的，慢一點比較好看。
   const DRIFT_SPEED_FACTOR = 0.75;
   // 垂直飄移相對水平的比例：天使主要是橫向飄，上下只是輕微起伏。
@@ -22,15 +22,29 @@
     return Number.isFinite(value);
   }
 
-  // 飛行角色的圖是**以 baseY 為中心**往上下各畫一半，再整個往上浮 amplitude
-  // 並上下擺動（見 creature.js 的 draw）。所以能用的 baseY 範圍不是天空帶本身，
-  // 要再往下讓出「半個身高 + 浮起與擺動」的空間，否則天使的頭會被畫面上緣切掉。
-  // 實測 1080p 下天使身高約 290px：baseY=171 時頭頂落在 y=4，整個上半身不見了。
+  // pulse 這個 style 的 scaleY 最大值（見 creature.js 的 motionOffset）。
+  // 這裡不 require creature.js——flight.js 在瀏覽器是獨立的 script，載入順序不保證。
+  // 兩邊會不會走鐘由 test/flight.test.js 直接拿真的 motionOffset 對答案來擋。
+  const PULSE_SCALE_MAX = 1.12;
+
+  // 能用的 baseY 範圍。**不是**天空帶本身——要往下讓出整個身體的空間，
+  // 否則天使的頭會被畫面上緣切掉。
+  //
+  // 照 creature.js 的 draw 反推，不要憑印象：
+  //   y      = baseY - renderHeight/2 - hover + off.yOffset      （translate）
+  //   圖頂端 = y - renderHeight/2 * off.scaleY                    （scale 後 drawImage）
+  // 其中飛行角色的 hover = amplitude，pulse 的 yOffset ∈ [-amplitude, +amplitude]、
+  // scaleY 最大 PULSE_SCALE_MAX。代進去最壞情況是
+  //   圖頂端 = baseY - renderHeight * (1 + PULSE_SCALE_MAX)/2 - 2 * amplitude
+  //
+  // 舊版只讓出「半個身高」，等於漏算了另外半個：實測 1080p 的天使
+  // （renderHeight 281、amplitude 23）頭頂會頂到 y=0，光環被切掉。
   function flyableBand(area, self) {
     const height = finite(self.renderHeight) ? self.renderHeight : self.height;
-    const half = (finite(height) ? height : 0) / 2;
-    const swing = (finite(self.amplitude) ? self.amplitude : half * 0.12) * 2;
-    const top = area.top + half + swing;
+    const body = finite(height) ? height : 0;
+    const amplitude = finite(self.amplitude) ? self.amplitude : body * 0.12;
+    const reserve = body * (1 + PULSE_SCALE_MAX) / 2 + amplitude * 2;
+    const top = area.top + reserve;
     const bottom = area.bottom;
     return { top: Math.min(top, bottom), bottom: Math.max(top, bottom) };
   }
@@ -132,6 +146,7 @@
     SKY_TOP,
     SKY_BOTTOM,
     SEPARATION_WIDTHS,
+    PULSE_SCALE_MAX,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Flight = api;

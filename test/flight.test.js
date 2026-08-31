@@ -1,6 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { getSkyArea, flyableBand, findSkySpawn, driftFlyer, SEPARATION_WIDTHS } = require('../src/flight.js');
+const { getSkyArea, flyableBand, findSkySpawn, driftFlyer, SEPARATION_WIDTHS, PULSE_SCALE_MAX }
+  = require('../src/flight.js');
+const { motionOffset } = require('../src/creature.js');
 const { getWalkableArea } = require('../src/movement.js');
 
 function flyer(overrides = {}) {
@@ -25,18 +27,90 @@ test('天空帶完全在可行走區上緣之上，天使不會飄到草地上',
   }
 });
 
-test('天使的頭不會被畫面上緣切掉——可用的 baseY 帶要讓出半個身高', () => {
-  // 飛行角色的圖是以 baseY 為中心往上下各畫一半，再整個往上浮 amplitude 並擺動。
-  // 直接用天空帶的上緣當 baseY 的話，上半身會被切掉：實測 1080p 下天使身高約
-  // 290px，baseY=171 時頭頂落在 y=4，整個上半身不見了。
-  const area = getSkyArea(1920, 1080);
-  const angel = { height: 290, renderHeight: 290, amplitude: 22 };
-  const band = flyableBand(area, angel);
+// 飛行角色實際被畫出來的上下緣。**照 creature.js 的 draw 算**，不重述 flight.js
+// 的公式——上一版的測試把 flyableBand 的算式抄過來當答案，等於拿自己驗自己：
+// 那條算式漏算了半個身高，測試卻照樣綠燈，天使的光環在 1080p 下被畫面上緣切掉。
+function drawnSpan(self, baseY, t) {
+  const off = motionOffset('pulse', t, {
+    amplitude: self.amplitude, freq: self.freq, phase: self.phase || 0,
+  });
+  const hover = self.amplitude; // draw(): 非 grounded 的 hover 就是 amplitude
+  const y = baseY - self.renderHeight / 2 - hover + off.yOffset;
+  const half = (self.renderHeight / 2) * off.scaleY;
+  return { top: y - half, bottom: y + half };
+}
 
-  const highestTop = band.top - angel.renderHeight / 2 - angel.amplitude * 2;
-  assert.ok(highestTop >= 0, `最高點時頭頂不得超出畫面（實際 ${highestTop.toFixed(0)}）`);
-  assert.ok(band.bottom > band.top, '可用帶要有高度');
-  assert.ok(band.top > area.top, '可用帶上緣必須低於天空帶上緣');
+// 掃過一整個週期取最壞值。用取樣而不是解析解，是為了讓 motionOffset 之後怎麼改
+// （換波形、加項）這裡都還抓得到。
+function worstDrawnSpan(self, baseY) {
+  let top = Infinity;
+  let bottom = -Infinity;
+  for (let t = 0; t < 200; t += 0.01) {
+    const span = drawnSpan(self, baseY, t);
+    if (span.top < top) top = span.top;
+    if (span.bottom > bottom) bottom = span.bottom;
+  }
+  return { top, bottom };
+}
+
+test('天使的頭不會被畫面上緣切掉——用真正的繪製幾何驗，不是重抄公式', () => {
+  // 1080p 下實測到的天使尺寸（renderHeight 281、amplitude 23.3），其餘解析度等比例。
+  for (const [w, h] of [[1920, 1080], [1280, 720], [3840, 2160], [1024, 768]]) {
+    const area = getSkyArea(w, h);
+    const angel = {
+      renderHeight: 281 * h / 1080, height: 281 * h / 1080,
+      amplitude: 23.3 * h / 1080, freq: 0.5, phase: 0.7,
+    };
+    const band = flyableBand(area, angel);
+    assert.ok(band.bottom > band.top, `${w}x${h}：可用帶要有高度`);
+
+    // 飄到最高處時，整張圖都還要在畫面裡。
+    const worst = worstDrawnSpan(angel, band.top);
+    assert.ok(
+      worst.top >= 0,
+      `${w}x${h}：最高點時圖的頂端落在 y=${worst.top.toFixed(1)}，被畫面上緣切掉了`,
+    );
+  }
+});
+
+test('天使飄到最低處時，整張圖仍在草地上緣之上——不會壓到地面角色', () => {
+  for (const [w, h] of [[1920, 1080], [1280, 720], [3840, 2160], [1024, 768]]) {
+    const area = getSkyArea(w, h);
+    const ground = getWalkableArea(w, h);
+    const angel = {
+      renderHeight: 281 * h / 1080, height: 281 * h / 1080,
+      amplitude: 23.3 * h / 1080, freq: 0.5, phase: 0.7,
+    };
+    const band = flyableBand(area, angel);
+    const worst = worstDrawnSpan(angel, band.bottom);
+    assert.ok(
+      worst.bottom < ground.top,
+      `${w}x${h}：最低點時圖的底端 ${worst.bottom.toFixed(0)} 已經進到草地（上緣 ${ground.top.toFixed(0)}）`,
+    );
+  }
+});
+
+test('flight.js 抄的 PULSE_SCALE_MAX 要跟 creature.js 的真值一致', () => {
+  // flight.js 為了不依賴載入順序，自己寫了一份 pulse 的 scaleY 上限。
+  // 這裡直接拿真的 motionOffset 掃一輪，確認那份副本沒有走鐘。
+  let maxScaleY = -Infinity;
+  for (let t = 0; t < 200; t += 0.01) {
+    const off = motionOffset('pulse', t, { amplitude: 10, freq: 0.5, phase: 0 });
+    if (off.scaleY > maxScaleY) maxScaleY = off.scaleY;
+  }
+  assert.ok(
+    PULSE_SCALE_MAX >= maxScaleY - 1e-9,
+    `flight.js 的 PULSE_SCALE_MAX=${PULSE_SCALE_MAX} 已經小於實際的 ${maxScaleY.toFixed(4)}`,
+  );
+});
+
+test('pulse 的 yOffset 擺幅不超過 amplitude——flyableBand 讓出的 2×amplitude 才夠', () => {
+  let maxAbs = 0;
+  for (let t = 0; t < 200; t += 0.01) {
+    const off = motionOffset('pulse', t, { amplitude: 10, freq: 0.5, phase: 0 });
+    maxAbs = Math.max(maxAbs, Math.abs(off.yOffset));
+  }
+  assert.ok(maxAbs <= 10 + 1e-9, `yOffset 擺幅 ${maxAbs.toFixed(3)} 已經超過 amplitude`);
 });
 
 test('getSkyArea 對非有限正尺寸立即失敗', () => {
