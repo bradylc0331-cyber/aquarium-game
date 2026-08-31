@@ -441,45 +441,84 @@ test('steerCharacter 遇到擋路的障礙會真的繞過去，不是停在原�
   );
 });
 
-test('單獨一位角色也不得永久卡死：四周還有安全方向時必須繼續前進', () => {
-  // 這是實測抓到的狀態：1920x1080 真實可行走區、沒有任何鄰居、角色本身安全、
-  // blocked 為 false、目標還在 171px 外，而 36 個取樣方向裡有 19 個一幀之內是安全的。
-  // 舊版控制器只試「朝目標」與其 ±90° 兩條固定支線，三條都被河流的角落切到，
-  // 就落到 {vx:0, vy:0} 永遠停住——輸入每一幀都一樣，所以是永久的。
-  const area = getWalkableArea(1920, 1080);
-  const wedged = {
-    id: 'solo',
-    x: 1382.9023941464409,
-    baseY: 938.9579286408338,
-    targetX: 1382.9103240966795,
-    targetY: 768.371153497696,
-    width: 162,
-    height: 295,
-    cruiseSpeed: 55,
-    vx: 0,
-    vy: 0,
+test('單獨一位角色也不得永久卡死：三條固定射線全被擋住時仍要找到出路', () => {
+  // 這條在驗的是舊控制器的死法：它只試「朝目標」與其 ±90° 三條固定支線，
+  // 三條都被擋住就落到 {vx:0, vy:0} 永遠停住——輸入每一幀都一樣，所以是永久的。
+  //
+  // 夾具是**合成**的朝北開口在南的 U 形凹槽，不是正式場地。舊版用的是河流時代
+  // 錄下來的一組座標，今天量起來四周 36/36 個方向都是通的、角色也從不 threatened，
+  // 整條測試已經退化成「一個自由的角色會動」——前提沒了，斷言就沒有意義。
+  const self = {
+    id: 'solo', x: 500, baseY: 700, targetX: 500, targetY: 480,
+    width: 160, height: 290, cruiseSpeed: 55, vx: 0, vy: 0,
+  };
+  // 足跡半徑跟實作同一套公式，凹槽才會剛好貼著角色。
+  const radiusX = self.width * 0.42 + Math.max(10, self.width * 0.07);
+  const radiusY = radiusX * 0.4;
+  const CLEAR = 12; // 牆離足跡的空隙：角色站著是安全的，一往那個方向走就撞牆
+  const THICK = 40;
+  const area = {
+    left: 0, right: 1000, top: 0, bottom: 1000,
+    obstacles: [
+      // 北（正對目標）
+      { x: self.x - radiusX - CLEAR - THICK, y: self.baseY - radiusY - CLEAR - THICK,
+        width: (radiusX + CLEAR + THICK) * 2, height: THICK },
+      // 東（目標方向 +90°）
+      { x: self.x + radiusX + CLEAR, y: self.baseY - radiusY - CLEAR - THICK,
+        width: THICK, height: (radiusY + CLEAR + THICK) * 2 },
+      // 西（目標方向 -90°）
+      { x: self.x - radiusX - CLEAR - THICK, y: self.baseY - radiusY - CLEAR - THICK,
+        width: THICK, height: (radiusY + CLEAR + THICK) * 2 },
+    ],
   };
 
-  // 前提：角色是安全的（所以走的不是復位路徑），而且四周真的有路可走。
-  assert.equal(isSafe(wedged, [], area), true);
-  const dt = 1 / 60;
-  let safeDirections = 0;
-  for (let degrees = 0; degrees < 360; degrees += 10) {
+  const probeDistance = CLEAR + 8; // 剛好越過空隙碰到牆
+  const probe = (degrees) => {
     const radians = (degrees * Math.PI) / 180;
-    const step = {
-      ...wedged,
-      x: wedged.x + Math.cos(radians) * wedged.cruiseSpeed * dt,
-      baseY: wedged.baseY + Math.sin(radians) * wedged.cruiseSpeed * dt,
-    };
-    if (isSafe(step, [], area)) safeDirections++;
+    return isSafe({
+      ...self,
+      x: self.x + Math.cos(radians) * probeDistance,
+      baseY: self.baseY + Math.sin(radians) * probeDistance,
+    }, [], area);
+  };
+
+  // 前提：角色本身安全（走的不是復位路徑）。
+  assert.equal(isSafe(self, [], area), true, '前提：角色站著要是安全的');
+  // 前提：舊控制器會試的那三條射線**全部**被擋住。這才是這條測試存在的理由。
+  for (const [label, degrees] of [['朝目標', -90], ['目標 +90°', 0], ['目標 -90°', 180]]) {
+    assert.equal(probe(degrees), false, `前提：${label} 必須被擋住`);
   }
-  assert.ok(safeDirections > 12, `前提：四周要有明顯多條路可走（實際 ${safeDirections}/36）`);
+  // 前提：但確實還有別的路可以出去，而且不是四通八達——是一個真的凹槽。
+  let safeDirections = 0;
+  for (let degrees = 0; degrees < 360; degrees += 10) if (probe(degrees)) safeDirections++;
+  assert.ok(
+    safeDirections > 0 && safeDirections < 12,
+    `前提：要是一個真的凹槽——有出路但不多（實際 ${safeDirections}/36）`,
+  );
 
-  const result = steerCharacter(wedged, [wedged], area, dt);
+  const dt = 1 / 60;
+  const first = steerCharacter(self, [self], area, dt);
+  assert.equal(first.blocked, false);
+  assert.ok(
+    Math.hypot(first.x - self.x, first.baseY - self.baseY) > 0,
+    `三條固定射線全被擋住，但還有 ${safeDirections}/36 條路，卻一步都沒動`,
+  );
 
-  assert.equal(result.blocked, false);
-  const moved = Math.hypot(result.x - wedged.x, result.baseY - wedged.baseY);
-  assert.ok(moved > 0, `目標還在 171px 外、四周有 ${safeDirections}/36 條路，卻一步都沒動`);
+  // 光是「動了」還不夠——要真的走出凹槽並且繞到目標。實測 6.2 秒脫困、30 秒內抵達。
+  const pocketBottom = area.obstacles[1].y + area.obstacles[1].height;
+  let current = { ...self };
+  let escapedAt = null;
+  let arrivedAt = null;
+  for (let frame = 0; frame < 60 * 30; frame++) {
+    current = { ...current, ...steerCharacter(current, [current], area, dt) };
+    if (escapedAt === null && current.baseY > pocketBottom) escapedAt = frame / 60;
+    if (arrivedAt === null
+      && Math.hypot(current.targetX - current.x, current.targetY - current.baseY) < radiusX) {
+      arrivedAt = frame / 60;
+    }
+  }
+  assert.ok(escapedAt !== null && escapedAt < 15, `30 秒內沒走出凹槽（脫困時間 ${escapedAt}）`);
+  assert.ok(arrivedAt !== null, '走出凹槽之後仍然沒有繞到目標');
 });
 
 test('長時間運行後角色仍在移動、也還到得了目標，不會整場凍住', () => {
@@ -874,46 +913,89 @@ test('規格的「優先減速」：純減速就解得開時不該無謂側移',
   assert.ok(AVOID_SLOW_SCALE < 1, '減速的意思是要比原速慢');
 });
 
-test('chooseReachableTarget 回傳的目標一定走得到，而不是只保證安全', () => {
-  // 規格有一整節在講這件事：「整合層不能只挑一個安全的點」。
-  // 這條之前完全沒有測試——而它的兩條退路都是 `return chooseSafeTarget(...)`，
-  // 也就是在唯一需要這個函式的情境下，回傳的正好是規格禁止的那種點。
-  const area = getWalkableArea(1920, 1080);
-  const size = displaySize({ width: 220, height: 400 }, 1920, 1080, 1.05);
-  // 河的右岸：左岸的點雖然安全，卻要繞下緣窄走廊才過得去。
-  const self = {
-    id: 'east', x: 1580, baseY: 900, ...size,
-    targetX: 1580, targetY: 900, cruiseSpeed: 16, vx: 0, vy: 0,
+// 兩瓣地圖：一道到頂到底、沒有缺口的隔牆把場地切成東西兩半，角色在西側。
+// 東側的每一個點都「安全」，但一個都到不了——這正是規格禁止 chooseSafeTarget
+// 的情境，也是唯一能分辨兩個函式的地形。
+//
+// 為什麼不用正式場地：正式場地已經是一個沒有內部通道問題的凸矩形，7198 個安全點
+// 裡直線到不了的是 0 個，任何「安全的點」都同時是「走得到的點」，兩個函式在上面
+// 表現完全一樣。舊版這條測試就是拿正式場地寫的，前提句寫著「直線到西岸必須被河
+// 擋住」，但河早就拿掉了，那個探測點 (276.8, 700) 其實落在左邊那棵橄欖樹的樹幹裡
+// ——不是「對岸」，是一個根本不合法的位置。於是把整個函式換成
+// `return chooseSafeTarget(...)`（也就是規格明文禁止的那種行為）仍然 150/150 全綠。
+function twoLobeArea(size) {
+  const W = 1600;
+  const H = 1000;
+  const WALL_X = 800;
+  const WALL_T = 90;
+  return {
+    W, H, WALL_X, WALL_T,
+    area: {
+      left: 0, right: W, top: 0, bottom: H,
+      obstacles: [{ x: WALL_X, y: 0, width: WALL_T, height: H }],
+    },
+    isEast: (x) => x > WALL_X + WALL_T,
+    self: {
+      id: 'west', x: 300, baseY: 500, ...size,
+      targetX: 300, targetY: 500, cruiseSpeed: 16, vx: 0, vy: 0,
+    },
   };
+}
+
+test('chooseReachableTarget 回傳的目標一定走得到，而不是只保證安全', () => {
+  const size = displaySize({ width: 220, height: 400 }, 1920, 1080, 1.05);
+  const { area, isEast, self } = twoLobeArea(size);
+
+  // 前提一：起點安全，而且東側確實是「安全但到不了」，不是「不合法」。
   assert.equal(isSafe(self, [], area), true, '前提：起點要安全');
-  // 前提：真的在河的東岸——直線往西岸過不去，才測得到「可達」有沒有意義。
   assert.equal(
-    pathReaches(self, area, { targetX: area.left + 200, targetY: 700 }), false,
-    '前提：直線到西岸必須被河擋住',
+    isSafe({ ...self, x: 1200, baseY: 500 }, [], area), true,
+    '前提：東側的點本身必須是安全的，否則分辨不出「安全」與「走得到」',
+  );
+  assert.equal(
+    pathReaches(self, area, { targetX: 1200, targetY: 500 }), false,
+    '前提：直線過不去',
+  );
+  // planPath 回傳非 null 不代表「到得了目標」——它回的是**最接近目標的可達節點**。
+  // 所以可達性要看終點落在哪一側，不能只看 plan !== null（舊版就是這樣寫的）。
+  const probe = planPath(self, [], area, 1200, 500);
+  assert.ok(
+    probe === null || !isEast(probe[probe.length - 1].x),
+    '前提：繞路也過不去，路徑終點不該出現在東側',
   );
 
-  let seed = 20260901;
-  const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  const makeRandom = (initial) => {
+    let seed = initial;
+    return () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  };
 
-  let checked = 0;
-  for (let i = 0; i < 25; i++) {
-    const target = chooseReachableTarget(self, [self], area, random);
-    const moved = Math.hypot(target.targetX - self.x, target.targetY - self.baseY);
-    if (moved < 1e-9) continue; // 沒有可去之處時保留原目標，不算數
-    checked++;
+  const DRAWS = 400;
+  let safeSidePicks = 0;
+  let reachableSidePicks = 0;
+  const safeRandom = makeRandom(20260901);
+  const reachableRandom = makeRandom(20260901);
+  for (let i = 0; i < DRAWS; i++) {
+    if (isEast(chooseSafeTarget(self, [self], area, safeRandom).targetX)) safeSidePicks++;
+
+    const target = chooseReachableTarget(self, [self], area, reachableRandom);
     assert.equal(
       isSafe({ ...self, x: target.targetX, baseY: target.targetY }, [], area), true,
       `目標本身要安全（${target.targetX.toFixed(0)}, ${target.targetY.toFixed(0)}）`,
     );
-    // 真正的要求：走得到。用同一套 BFS 驗證。
-    const plan = planPath(self, [], area, target.targetX, target.targetY);
-    const straight = pathReaches(self, area, target);
-    assert.ok(
-      plan !== null || straight,
-      `目標必須走得到（${target.targetX.toFixed(0)}, ${target.targetY.toFixed(0)}）`,
-    );
+    if (isEast(target.targetX)) reachableSidePicks++;
   }
-  assert.ok(checked >= 20, `前提：要真的挑出目標來驗（實際 ${checked} 個）`);
+
+  // 前提二：夾具真的有鑑別力。chooseSafeTarget 要**經常**挑到過不去的東側，
+  // 否則這條測試只是在驗一個不會發生的情境——舊版就是死在這一點上。
+  assert.ok(
+    safeSidePicks >= DRAWS * 0.1,
+    `前提：chooseSafeTarget 要經常挑到到不了的東側（實際 ${safeSidePicks}/${DRAWS}）`,
+  );
+  // 真正的要求。
+  assert.equal(
+    reachableSidePicks, 0,
+    `chooseReachableTarget 挑了 ${reachableSidePicks}/${DRAWS} 個到不了的目標`,
+  );
 });
 
 test('沒有「夠遠」的可達點時，退而求其次取最遠的**可達**點', () => {
