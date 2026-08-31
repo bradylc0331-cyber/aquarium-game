@@ -129,22 +129,6 @@
     return { leftArmAngle: 0, rightArmAngle: 0, footYOffset: 0 };
   }
 
-  // 規格：角色下方只顯示人物名稱，不顯示動作名稱。這個函式只吃 name，
-  // 沒有第二個文字參數可以傳，動作文字從介面上就不可能被接上去。
-  function drawCharacterName(ctx, name, x, y, fontSize, opacity) {
-    ctx.save();
-    ctx.globalAlpha = opacity;
-    ctx.font = `600 ${fontSize}px -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.lineWidth = 5;
-    ctx.strokeStyle = 'rgba(255,255,255,0.88)';
-    ctx.fillStyle = '#5d3d21';
-    ctx.strokeText(name, x, y);
-    ctx.fillText(name, x, y);
-    ctx.restore();
-  }
-
   function randRange([min, max]) {
     return min + Math.random() * (max - min);
   }
@@ -418,11 +402,6 @@
       this.drawArm(ctx, rig.leftArm, pose.leftArmAngle);
       this.drawArm(ctx, rig.rightArm, pose.rightArmAngle);
       ctx.restore();
-
-      // 規格：角色下方只顯示人物名稱，不顯示動作文字。
-      // 名字一律畫在地面錨點下方，漂浮角色也一樣——名字跟著身體浮會讀不穩。
-      drawCharacterName(ctx, this.species.name, this.x, this.baseY + 10,
-        Math.max(16, this.renderWidth * 0.12), opacity);
     }
   }
 
@@ -436,7 +415,6 @@
     depthScaleForY,
     transitionOpacity,
     gesturePose,
-    drawCharacterName,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CreatureModule = api;

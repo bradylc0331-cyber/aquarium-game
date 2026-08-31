@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>列印：A4 QR 聖經人物塗色紙</title>
+<title>列印：A4 QR 聖經人物著色頁</title>
 <style>
   body { margin: 0; font: 15px/1.6 -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; color: #14213d; background: #eef4fb; }
   .toolbar { padding: 16px; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.06); position: sticky; top: 0; z-index: 10; }
@@ -28,18 +28,22 @@
 <body>
 <div class="toolbar">
   <button onclick="window.print()">🖨️ 列印全部</button>
-  <p>每頁都是一張完整 A4 橫式人物塗色紙。列印請選「A4、橫向、100%／實際大小」，不要選「符合頁面」。四角黑色方塊和上方 QR Code 都要完整印出，作品完成後整張直接放到攝影機下，不用裁剪。</p>
+  <p>每頁都是一張完整 A4 橫式著色頁，紙張下緣印有該人物最為人熟知的經文。列印請選「A4、橫向、100%／實際大小」，不要選「符合頁面」。四角黑色方塊和上方 QR Code 都要完整印出，作品完成後整張直接放到攝影機下，不用裁剪。</p>
 </div>
 
 <script src="../src/constants.js"></script>
 <script src="../src/species.js"></script>
 <script src="../src/qrCode.js"></script>
+<script src="../src/printLayout.js"></script>
 <script>
 (function () {
-  const { CANVAS_W, CANVAS_H, WORK_AREA, MARKER_CANONICAL, MARKER_SIZE, QR_AREA, PRINT_MM_PER_PX } = AquariumConstants;
+  const { CANVAS_W, CANVAS_H, WORK_AREA, MARKER_CANONICAL, MARKER_INSET, MARKER_SIZE, QR_AREA, PRINT_MM_PER_PX } = AquariumConstants;
   const root = document.currentScript.parentElement;
 
+  const { layoutVerseBand, VERSE_REF_SIZE } = PrintLayout;
+
   function speciesPrintSVG(species) {
+    const verseBand = layoutVerseBand(species);
     const { x0, y0, x1, y1 } = WORK_AREA;
     const w = x1 - x0, h = y1 - y0;
     const wmm = (CANVAS_W * PRINT_MM_PER_PX).toFixed(1);
@@ -60,7 +64,7 @@
     const qrText = `BIBLE:${species.id.toUpperCase()}`;
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${wmm}mm" height="${hmm}mm" viewBox="0 0 ${CANVAS_W} ${CANVAS_H}">
       <rect width="100%" height="100%" fill="#fff"/>
-      <text x="72" y="48" font-size="26" font-weight="700" fill="#222" font-family="sans-serif">${species.emoji} ${species.name}・聖經人物塗色紙</text>
+      <text x="72" y="48" font-size="26" font-weight="700" fill="#222" font-family="sans-serif">${species.emoji} ${species.name}</text>
       <text x="480" y="35" font-size="13" fill="#555" font-family="sans-serif">QR 自動辨識區</text>
       <text x="480" y="55" font-size="13" fill="#a23b2a" font-family="sans-serif">請勿塗畫或遮住四角方塊</text>
       ${BibleQrCode.svgMarkup(qrText, QR_AREA.x, QR_AREA.y, QR_AREA.size)}
@@ -68,7 +72,8 @@
       ${artwork}
       <rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="none" stroke="#ddd" stroke-width="1.5"/>
       ${squares}
-      <text x="${CANVAS_W / 2}" y="559" font-size="12" fill="#777" text-anchor="middle" font-family="sans-serif">整張 A4 直接放到攝影機下方，不用裁剪・四個黑色方塊需完整入鏡</text>
+      <text x="${verseBand.centerX}" y="558" font-size="${verseBand.fontSize}" font-weight="600" fill="#333" text-anchor="middle" font-family="sans-serif">「${species.verse}」</text>
+      <text x="${verseBand.refX}" y="558" font-size="${VERSE_REF_SIZE}" fill="#888" text-anchor="end" font-family="sans-serif">${species.verseRef}</text>
     </svg>`;
   }
 
@@ -80,7 +85,7 @@
   }
 
   for (const species of Species.SPECIES) {
-    addSheet(`${species.emoji} ${species.name}・A4 QR 自動辨識塗色紙`, speciesPrintSVG(species));
+    addSheet(`${species.emoji} ${species.name}　「${species.verse}」${species.verseRef}`, speciesPrintSVG(species));
   }
 })();
 </script>

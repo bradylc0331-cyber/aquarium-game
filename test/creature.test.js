@@ -9,7 +9,6 @@ const {
   displaySize,
   depthScaleForY,
   gesturePose,
-  drawCharacterName,
 } = require('../src/creature.js');
 const { getSpecies } = require('../src/species.js');
 const Movement = require('../src/movement.js');
@@ -41,12 +40,13 @@ test('未知樣式會退回 fish', () => {
 });
 
 function recordingCtx() {
-  const calls = { scale: [], fillText: [], drawImage: 0 };
+  const calls = { scale: [], fillText: [], strokeText: [], drawImage: 0 };
   const ctx = {
     globalAlpha: 1, fillStyle: '', strokeStyle: '', font: '', textAlign: '',
     textBaseline: '', lineWidth: 0,
     save() {}, restore() {}, translate() {}, rotate() {},
-    beginPath() {}, ellipse() {}, fill() {}, strokeText() {},
+    beginPath() {}, ellipse() {}, fill() {},
+    strokeText(text) { calls.strokeText.push(text); },
     drawImage() { calls.drawImage++; },
     fillText(text) { calls.fillText.push(text); },
     scale(x, y) { calls.scale.push([x, y]); },
@@ -100,15 +100,22 @@ test('進場後角色會播放一次招呼動作，然後停下來等下一次�
   assert.ok(creature.nextGestureAt > 0, '應該排定下一次偶發動作');
 });
 
-test('畫面上只寫人物名稱，不含動作文字', () => {
+test('畫面上完全不寫字：角色本身就是畫面，名字留在孩子的圖畫紙上', () => {
+  // 決定：螢幕上不顯示人物名稱。孩子會把自己的圖畫紙帶回去，名字在紙上；
+  // 螢幕擠到 15 位時名字會互相遮擋（實測大衛的名字被但以理蓋掉、挪亞完全看不到），
+  // 拿掉之後畫面乾淨，也不會有半截字。
   const { ctx, calls } = recordingCtx();
   const creature = makeCreature({ spawn: { x: 400, baseY: 700 } });
   creature.opacity = 1;
-  creature.currentGesture = 'wave';
 
-  creature.draw(ctx, 0.2);
+  // 待機與揮手兩種狀態都不能寫字
+  creature.draw(ctx, 0);
+  creature.gestureElapsed = 0;
+  creature.gesture = 'wave';
+  creature.draw(ctx, 0.4);
 
-  assert.deepEqual(calls.fillText, ['挪亞'], '正在揮手時畫出來的仍然只有名字');
+  assert.deepEqual(calls.fillText, [], `畫面上不應該有任何文字，實際畫了 ${JSON.stringify(calls.fillText)}`);
+  assert.deepEqual(calls.strokeText, [], `也不應該有描邊文字，實際 ${JSON.stringify(calls.strokeText)}`);
 });
 
 test('進場淡入期間 opacity 從 0 升到 1，退場則降回 0', () => {
@@ -201,20 +208,6 @@ test('招呼手勢只回傳肢體角度，不改腳底位置', () => {
   assert.equal(none.footYOffset, 0);
 });
 
-test('角色標籤只畫人物名稱，不含任何動作文字', () => {
-  const labels = [];
-  const ctx = {
-    save() {}, restore() {}, strokeText() {},
-    fillText(text) { labels.push(text); },
-  };
-  drawCharacterName(ctx, '大衛', 100, 200, 24, 1);
-  assert.deepEqual(labels, ['大衛']);
-
-  // 即使角色正在揮手，畫出來的仍然只有名字
-  labels.length = 0;
-  drawCharacterName(ctx, '天使', 10, 20, 18, 0.5);
-  assert.deepEqual(labels, ['天使']);
-});
 
 test('自然踏步時左右腿角度相反，半個週期後交換前後腳', () => {
   const a = walkPose(0.25, { freq: Math.PI * 2, phase: 0, maxAngle: 0.1 });
