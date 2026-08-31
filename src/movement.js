@@ -283,11 +283,17 @@
     };
   }
 
+  // 沿線取樣的間距，路徑檢查與復位搜尋共用同一條規則——這是**一條**規格，
+  // 抄成兩份就會各自漂移。必須明顯小於足跡的**短軸直徑**，否則整個足跡可能從
+  // 兩個取樣點之間穿過去，薄牆就擋不住了。0.45 半徑 = 0.225 直徑，有四倍餘裕。
+  function segmentSampleStep(dimensions) {
+    return Math.max(1, Math.min(dimensions.radiusX, dimensions.radiusY) * 0.45);
+  }
+
   function pathIsSafe(self, others, area, endX, endY) {
     const distance = Math.hypot(endX - self.x, endY - self.baseY);
     const dimensions = personalSpace(self);
-    const stepLength = Math.max(1, Math.min(dimensions.radiusX, dimensions.radiusY) * 0.45);
-    const steps = Math.max(1, Math.ceil(distance / stepLength));
+    const steps = Math.max(1, Math.ceil(distance / segmentSampleStep(dimensions)));
 
     for (let step = 1; step <= steps; step++) {
       const portion = step / steps;
@@ -339,7 +345,7 @@
   // 逐段取樣檢查一條直線位移，確認它沒有碰到 guards 裡的任何角色或障礙。
   function segmentIsClear(from, to, self, dimensions, guards) {
     const distance = Math.hypot(to.x - from.x, to.baseY - from.baseY);
-    const stepLength = Math.max(1, Math.min(dimensions.radiusX, dimensions.radiusY) * 0.45);
+    const stepLength = segmentSampleStep(dimensions);
     const steps = Math.max(1, Math.ceil(distance / stepLength));
 
     for (let step = 1; step <= steps; step++) {
@@ -394,13 +400,17 @@
     };
 
     // 超出預算時兩軸等比放粗，維持網格與角色的形狀比例。
+    // 上限也要等比套用：只夾住先觸頂的那一軸，另一軸會繼續長，比例就跑掉了。
     let bounds = boundsFor(stepX, stepY);
     while (
       bounds.nodeCount > RECOVERY_MAX_NODES
       && Math.max(stepX, stepY) < RECOVERY_ABSOLUTE_MAX_STEP
     ) {
-      stepX = Math.min(stepX * 1.25, RECOVERY_ABSOLUTE_MAX_STEP);
-      stepY = Math.min(stepY * 1.25, RECOVERY_ABSOLUTE_MAX_STEP);
+      const largest = Math.max(stepX, stepY);
+      const growth = Math.min(1.25, RECOVERY_ABSOLUTE_MAX_STEP / largest);
+      if (growth <= 1) break;
+      stepX *= growth;
+      stepY *= growth;
       bounds = boundsFor(stepX, stepY);
     }
 
@@ -570,8 +580,10 @@
     findSafeSpawn,
     chooseSafeTarget,
     steerCharacter,
-    // 匯出給測試斷言「有限搜尋空間」的解析度與大小；正式流程不需要直接呼叫。
+    // 以下匯出給測試釘住規格明文要求的性質；正式流程不需要直接呼叫。
     recoveryGrid,
+    segmentSampleStep,
+    NEIGHBOR_OFFSETS,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Movement = api;

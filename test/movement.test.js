@@ -14,6 +14,8 @@ const {
   chooseSafeTarget,
   steerCharacter,
   recoveryGrid,
+  segmentSampleStep,
+  NEIGHBOR_OFFSETS,
 } = require('../src/movement.js');
 const { displaySize } = require('../src/creature.js');
 
@@ -627,6 +629,126 @@ test('薄牆也擋得住：路徑要逐段取樣，不能只檢查每一格的�
     result.x < wallX,
     `不得跳過薄牆（牆在 x=${wallX}、厚 ${wallThickness.toFixed(1)}，實際落在 x=${result.x.toFixed(1)}）`,
   );
+});
+
+test('沿線取樣的間距必須小於足跡短軸直徑，否則足跡會從兩點之間漏過去', () => {
+  // 這條是取樣密度的規格底線：相鄰兩個取樣點之間的距離若大於等於足跡的短軸
+  // 直徑，就存在一整片「兩點都沒踩到、但足跡實際會壓上去」的區域，薄牆就穿得過去。
+  // 下方的橫向薄牆測試示範了它的行為後果；這裡把常數本身釘住，讓任何把間距
+  // 放粗的改動（不論倍率）都在單元層就被擋下來，不必等剛好挑中會穿隧的場地尺寸。
+  for (const width of [4, 20, 40, 120, 400]) {
+    const space = personalSpace(character({ width, height: width * 2 }));
+    const shortDiameter = 2 * Math.min(space.radiusX, space.radiusY);
+    const step = segmentSampleStep(space);
+    assert.ok(step > 0, `width=${width}：取樣間距必須為正`);
+    assert.ok(
+      step < shortDiameter,
+      `width=${width}：取樣間距 ${step.toFixed(2)} 必須小於短軸直徑 ${shortDiameter.toFixed(2)}`,
+    );
+  }
+});
+
+test('垂直方向的薄牆同樣擋得住——短軸就是 Y 軸，取樣密度要跟得上', () => {
+  // 既有的薄牆測試是左右向的，檢查的是 stepX。但地面足跡是壓扁的橢圓，**短軸是 Y**，
+  // 上下方向才是最容易漏掉的那一軸：格點間距與足跡高度的比值在這裡最大。
+  const W = 4000;
+  const H = 3000;
+  const startY = 300;
+  const self = character({
+    x: W / 2, baseY: startY, width: 20, height: 80,
+    targetX: W / 2, targetY: H - 200,
+  });
+  const probeArea = openArea({ right: W, bottom: H });
+  const anchor = { x: W / 2, baseY: startY };
+  const { stepY } = recoveryGrid(self, probeArea, anchor);
+  const space = personalSpace(self);
+
+  // 牆加上兩側的足跡短半徑要整段塞進相鄰兩個格點之間，
+  // 「只檢查格點端點」的版本才會一步跨過去，逐段取樣的版本才擋得住。
+  const wallThickness = Math.min(20, (stepY - 2 * space.radiusY) * 0.6);
+  assert.ok(wallThickness >= 1, '前提：垂直步長要夠粗，禁區才塞得進一格之內');
+  const midpointY = startY + stepY * 10.5;
+  const wallY = midpointY - wallThickness / 2;
+
+  const sealed = openArea({
+    right: W,
+    bottom: H,
+    obstacles: [
+      // 牆上方整片封死：不能存在「還沒到牆就找到安全點」的捷徑，
+      // 否則穿隧與不穿隧的版本都會停在牆前面，斷言就恆真了。
+      { x: 0, y: 0, width: W, height: wallY },
+      { x: 0, y: wallY, width: W, height: wallThickness },
+    ],
+  });
+
+  assert.equal(isSafe(self, [], sealed), false, '前提：起點必須不安全，才會真的進入復位');
+
+  let safeBeyond = 0;
+  for (let x = 100; x <= W - 100; x += 40) {
+    for (let baseY = wallY + 200; baseY <= H - 100; baseY += 40) {
+      if (isSafe({ ...self, x, baseY }, [], sealed)) safeBeyond++;
+    }
+  }
+  assert.ok(safeBeyond > 500, `牆下方確實有大片安全區（實際 ${safeBeyond} 點）`);
+
+  const result = steerCharacter(self, [self], sealed, 0.1);
+
+  assert.ok(
+    result.baseY < wallY,
+    `不得跳過橫向薄牆（牆在 y=${wallY.toFixed(1)}、厚 ${wallThickness.toFixed(1)}，`
+      + `實際落在 y=${result.baseY.toFixed(1)}）`,
+  );
+});
+
+test('正常前進也不能穿隧：一幀跨得過的薄牆，路徑檢查要沿線攔下來', () => {
+  // 兩個薄牆測試守的都是**復位搜尋**的路徑檢查。前進路徑走的是另一條程式碼
+  // （pathIsSafe），同樣是逐段取樣，同樣會穿隧：只要一幀的位移大於「牆 + 兩側足跡」，
+  // 只檢查終點的版本就會直接出現在牆的另一側。這裡用高速角色把那一幀撐大。
+  const wallX = 600;
+  const wallThickness = 10;
+  const area = openArea({
+    right: 2000,
+    obstacles: [{ x: wallX, y: 0, width: wallThickness, height: 800 }],
+  });
+  const self = character({
+    x: 500, baseY: 400, width: 20, height: 80,
+    targetX: 1900, targetY: 400, cruiseSpeed: 1500,
+  });
+  const space = personalSpace(self);
+
+  // 前提一：起點是安全的，所以走的是正常前進、不是復位。
+  assert.equal(isSafe(self, [], area), true);
+  // 前提二：一幀的位移真的大於「牆 + 兩側足跡」，終點會落在牆的另一側且安全。
+  const dt = 0.1;
+  const stride = self.cruiseSpeed * dt;
+  assert.ok(
+    stride > wallThickness + 2 * space.radiusX,
+    `一幀位移 ${stride} 必須跨得過整段禁區`,
+  );
+  assert.equal(isSafe({ ...self, x: self.x + stride }, [], area), true, '終點本身是安全的');
+
+  const result = steerCharacter(self, [self], area, dt);
+
+  assert.ok(
+    result.x + space.radiusX <= wallX,
+    `不得穿過薄牆（牆在 x=${wallX}，實際落在 x=${result.x.toFixed(1)}）`,
+  );
+});
+
+test('復位鄰居是 8-connected，四個斜向都在', () => {
+  // 規格明文要求 8-neighbor。改成 4-neighbor 時，多數場地仍然找得到路（只是繞遠），
+  // 只有「唯一出口是斜向開口」的少數場地才會誤報 blocked——測過的隨機場地裡
+  // 2576 個只有 2 個會露餡。這種機率不適合靠隨機測試守，直接把常數釘住。
+  const expected = [];
+  for (const dx of [-1, 0, 1]) {
+    for (const dy of [-1, 0, 1]) {
+      if (dx !== 0 || dy !== 0) expected.push(`${dx},${dy}`);
+    }
+  }
+  const actual = NEIGHBOR_OFFSETS.map(([dx, dy]) => `${dx},${dy}`);
+
+  assert.equal(actual.length, 8, '必須恰好 8 個方向，不重不漏');
+  assert.deepEqual([...actual].sort(), expected.sort());
 });
 
 test('15 位角色真的進得了場——多個 seed 與解析度都要成立，不能靠挑 seed', () => {
