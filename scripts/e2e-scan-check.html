@@ -1,0 +1,137 @@
+<!doctype html><meta charset="utf-8">
+<!--
+  掃描管線的端對端檢查。
+
+  各個模組（markerDetect / homography / qrCode / extract）都有自己的單元測試，
+  但沒有任何測試驗證它們**串起來**會動——而串起來才是現場真正跑的東西。
+  這一頁就是補這個缺口：合成一張「印好、塗過色、又被斜著拍下來」的照片，
+  然後跑完整條真正的管線：偵測四角 → 求 homography → 反投影拉正 → 讀 QR →
+  套遮罩 → 掃描品質判定，最後確認認出來的人物就是印上去的那一位。
+
+  需要瀏覽器（canvas / Image），所以不在 `npm test` 裡（那一組是零相依的 node --test）。
+  用法：node scripts/e2e-scan-check.js
+-->
+<body>
+<script src="../src/constants.js"></script>
+<script src="../src/species.js"></script>
+<script src="../src/qrCode.js"></script>
+<script src="../src/printLayout.js"></script>
+<script src="../src/svgRaster.js"></script>
+<script src="../src/markerDetect.js"></script>
+<script src="../src/homography.js"></script>
+<script src="../src/extract.js"></script>
+<script src="../src/artworkMessage.js"></script>
+<script>
+const { CANVAS_W, CANVAS_H, MARKER_CANONICAL, MARKER_SIZE, WORK_AREA, QR_AREA } = AquariumConstants;
+const out = [];
+const log = (m) => out.push(m);
+
+// species 裡的素材路徑是相對於網站根目錄的；這一頁在 /scripts/ 底下，要往上一層。
+const ASSET_BASE = '../';
+function loadImage(src){
+  return new Promise((res,rej)=>{
+    const i=new Image();
+    i.onload=()=>res(i);
+    i.onerror=()=>rej(new Error('讀不到素材：'+src));
+    i.src=ASSET_BASE+src;
+  });
+}
+
+// 1. 產生一張「印好又被塗色」的紙（跟 print.html 同一套座標）
+async function makeColouredSheet(species){
+  const c=document.createElement('canvas'); c.width=CANVAS_W; c.height=CANVAS_H;
+  const g=c.getContext('2d');
+  g.fillStyle='#fff'; g.fillRect(0,0,CANVAS_W,CANVAS_H);
+  const half=MARKER_SIZE/2;
+  for(const [x,y] of Object.values(MARKER_CANONICAL)){ g.fillStyle='#000'; g.fillRect(x-half,y-half,MARKER_SIZE,MARKER_SIZE); }
+  // QR：用真的產生器畫上去
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${CANVAS_W}" height="${CANVAS_H}">${BibleQrCode.svgMarkup('BIBLE:'+species.id.toUpperCase(),QR_AREA.x,QR_AREA.y,QR_AREA.size)}</svg>`;
+  const qrCanvas=await SvgRaster.rasterizeSVGToCanvas(svg,CANVAS_W,CANVAS_H);
+  g.drawImage(qrCanvas,0,0);
+  // 人物線稿 + 小朋友的塗色（用遮罩內隨機色塊模擬）
+  const art=await loadImage(species.art);
+  const {x0,y0,x1,y1}=WORK_AREA;
+  const mask=await loadImage(species.mask);
+  const mc=document.createElement('canvas'); mc.width=x1-x0; mc.height=y1-y0;
+  const mg=mc.getContext('2d');
+  mg.drawImage(mask,0,0,mc.width,mc.height);
+  const md=mg.getImageData(0,0,mc.width,mc.height);
+  // 遮罩白色處塗上顏色
+  const paint=mg.createImageData(mc.width,mc.height);
+  for(let i=0;i<md.data.length;i+=4){
+    const on=md.data[i]>128;
+    const px=(i/4)%mc.width, py=Math.floor((i/4)/mc.width);
+    paint.data[i]=on?(120+((px/17|0)%4)*35):255;
+    paint.data[i+1]=on?(90+((py/23|0)%4)*40):255;
+    paint.data[i+2]=on?(70+((px/31|0)%3)*50):255;
+    paint.data[i+3]=255;
+  }
+  mg.putImageData(paint,0,0);
+  mg.drawImage(art,0,0,mc.width,mc.height); // 線稿疊上去
+  g.drawImage(mc,x0,y0);
+  return c;
+}
+
+// 2. 模擬相機的斜角：把整張紙做透視變形後貼到一張更大的「照片」上
+function simulatePhoto(sheet, skew){
+  const PW=1100, PH=800;
+  const c=document.createElement('canvas'); c.width=PW; c.height=PH;
+  const g=c.getContext('2d');
+  g.fillStyle='#c8c4bb'; g.fillRect(0,0,PW,PH); // 桌面
+  const src=sheet.getContext('2d').getImageData(0,0,CANVAS_W,CANVAS_H);
+  const dstQuad=[[110+skew,70],[PW-90,40+skew],[PW-130-skew,PH-70],[80,PH-100-skew]];
+  const srcQuad=[[0,0],[CANVAS_W,0],[CANVAS_W,CANVAS_H],[0,CANVAS_H]];
+  const H=Homography.computeHomography(srcQuad,dstQuad);
+  const Hinv=Homography.invertHomography(H);
+  const photo=g.getImageData(0,0,PW,PH);
+  for(let y=0;y<PH;y++) for(let x=0;x<PW;x++){
+    const [sx,sy]=Homography.applyHomography(Hinv,x+0.5,y+0.5);
+    if(sx<0||sy<0||sx>=CANVAS_W||sy>=CANVAS_H) continue;
+    const si=((Math.floor(sy)*CANVAS_W)+Math.floor(sx))*4, di=(y*PW+x)*4;
+    photo.data[di]=src.data[si]; photo.data[di+1]=src.data[si+1];
+    photo.data[di+2]=src.data[si+2]; photo.data[di+3]=255;
+  }
+  g.putImageData(photo,0,0);
+  return c;
+}
+
+(async () => {
+  let pass=0, fail=0;
+  for(const species of Species.SPECIES){
+    for(const skew of [0, 35]){
+      try{
+        const sheet=await makeColouredSheet(species);
+        const photo=simulatePhoto(sheet,skew);
+        const pd=photo.getContext('2d').getImageData(0,0,photo.width,photo.height);
+
+        // --- 真正的管線 ---
+        const corners=MarkerDetect.detectCorners(pd);
+        if(!corners){ log(`✗ ${species.id} skew=${skew}：偵測不到四角`); fail++; continue; }
+        const dst=[MARKER_CANONICAL.tl,MARKER_CANONICAL.tr,MARKER_CANONICAL.br,MARKER_CANONICAL.bl];
+        const H=Homography.computeHomography([corners.tl,corners.tr,corners.br,corners.bl],dst);
+        const warped=Homography.warpPerspectiveImageData(pd,Homography.invertHomography(H),CANVAS_W,CANVAS_H);
+        const qr=BibleQrCode.identify(warped,QR_AREA,Species.SPECIES.map(s=>({id:s.id,text:'BIBLE:'+s.id.toUpperCase()})));
+        const maskSvg=SvgRaster.canonicalMaskSVG ? null : null;
+        const maskImg=await loadImage(species.mask);
+        const mc=document.createElement('canvas');
+        const [,,vw,vh]=species.viewBox.split(' ').map(Number);
+        mc.width=vw; mc.height=vh; mc.getContext('2d').drawImage(maskImg,0,0,vw,vh);
+        // 把遮罩放到 WORK_AREA 對應的整張畫布座標
+        const full=document.createElement('canvas'); full.width=CANVAS_W; full.height=CANVAS_H;
+        const fg=full.getContext('2d'); fg.fillStyle='#000'; fg.fillRect(0,0,CANVAS_W,CANVAS_H);
+        fg.drawImage(mc,WORK_AREA.x0,WORK_AREA.y0,WORK_AREA.x1-WORK_AREA.x0,WORK_AREA.y1-WORK_AREA.y0);
+        const maskData=fg.getImageData(0,0,CANVAS_W,CANVAS_H);
+        const merged=Extract.applyMaskToImageData(warped,maskData);
+        const quality=Extract.assessExtraction(merged);
+
+        const qrOk = qr && qr.id===species.id;
+        const ok = qrOk && quality.ok;
+        if(ok) pass++; else fail++;
+        log(`${ok?'✓':'✗'} ${species.id.padEnd(9)} skew=${String(skew).padStart(2)}  四角=${corners?'OK':'—'} QR=${qr?qr.id:'讀不到'} 品質=${quality.ok?'OK':quality.reason}`);
+      }catch(e){ fail++; log(`✗ ${species.id} skew=${skew}：例外 ${e.message}`); }
+    }
+  }
+  log(`\n合計 通過 ${pass} / 失敗 ${fail}`);
+  window.__e2e = out.join('\n');
+})();
+</script></body>
