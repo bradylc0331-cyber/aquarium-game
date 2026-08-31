@@ -12,6 +12,37 @@
 
 一般透過 USB 接上電腦、能在 Chrome／Zoom 裡選到的 Webcam 可直接使用。只能透過 App、IP 位址或 RTSP 觀看的 Wi-Fi/IP Camera 不會直接出現在瀏覽器攝影機清單，需要另接虛擬攝影機軟體。
 
+## 先把程式跑起來（Mac mini／筆電）
+
+打開「終端機」，貼上這四行：
+
+```
+git clone https://github.com/bradylc0331-cyber/aquarium-game.git
+cd aquarium-game
+git checkout 2-5d-character-motion
+npm run serve
+```
+
+（已經 clone 過的話就 `cd aquarium-game && git pull && npm run serve`。）
+
+看到 `Serving HTTP on ... port 8933` 之後，用 **Chrome** 開
+<http://localhost:8933/>。終端機那個視窗整場都要開著，關掉網站就停了。
+
+不需要編譯，也不需要安裝任何套件——全部是靜態檔案，`npm run serve` 只是起一個
+本機小網頁伺服器。
+
+**不可以直接按兩下開 `display.html`。** 用 `file://` 開的話，畫面會是空的：
+瀏覽器會把從 `file://` 載入的圖片視為跨來源，畫到 canvas 之後就不准再讀回來，
+去背與遮罩用的 `getImageData` 會直接丟
+
+```
+SecurityError: Failed to execute 'getImageData' on 'CanvasRenderingContext2D':
+The canvas has been tainted by cross-origin data.
+```
+
+一個人物都不會出現。（攝影機權限與存檔在 `file://` 下反而是好的，所以症狀會很
+像「背景有了、人物沒了」，很容易誤判成素材壞掉。用 `http://localhost` 就沒事。）
+
 ## 活動前一天：列印 A4 QR 塗色紙
 
 1. 開啟網站首頁，點「🖨️ 列印 A4 QR 人物塗色紙」，或直接開啟 `templates/print.html`。
