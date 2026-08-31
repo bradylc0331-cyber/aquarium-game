@@ -52,8 +52,7 @@
   resize();
 
   const bubbles = AquariumScene.createBubbles(canvas.width, canvas.height, 40);
-  const flock = Array.from({ length: 3 }, () => AquariumScene.createSheep(canvas.width, canvas.height));
-  // 可行走區在每一幀重算（視窗會被縮放），角色移動與羊的避讓共用同一份。
+  // 可行走區在每一幀重算（視窗會被縮放）。
   let walkable = Movement.getWalkableArea(canvas.width, canvas.height);
   // 天空帶：會飛的角色在這裡飄，完全不跟地面角色搶位子。
   let sky = Flight.getSkyArea(canvas.width, canvas.height);
@@ -341,26 +340,16 @@
     }
 
     AquariumScene.updateBubbles(bubbles, dt, canvas.width, canvas.height);
-    for (const sheep of flock) {
-      // 羊要同時避開角色與其他羊，否則整群會慢慢疊在一起變成一坨白影
-      // 羊只需要避開地面角色——天上的天使擋不到牠。
-      const blockers = [...walkers, ...flock.filter((other) => other !== sheep)];
-      AquariumScene.updateSheep(sheep, dt, canvas.width, canvas.height, blockers);
-    }
 
     AquariumScene.drawBackground(ctx, canvas.width, canvas.height, elapsed);
     AquariumScene.drawCanopySway(ctx, canvas.width, canvas.height, elapsed);
     AquariumScene.drawBubbles(ctx, bubbles);
 
-    // 羊與角色一起依腳底深度排序，較靠近畫面下方的畫在前面，形成自然的 2.5D 景深。
-    const grounded = [...creatures, ...flock].sort((a, b) => a.baseY - b.baseY);
+    // 角色依腳底深度排序，較靠近畫面下方的畫在前面，形成自然的 2.5D 景深。
+    const grounded = [...creatures].sort((a, b) => a.baseY - b.baseY);
     for (const item of grounded) {
-      if (item.mode) {
-        AquariumScene.drawSheep(ctx, item, elapsed, canvas.height);
-      } else {
-        item.update(dt, elapsed);
-        item.draw(ctx, elapsed);
-      }
+      item.update(dt, elapsed);
+      item.draw(ctx, elapsed);
     }
 
     AquariumScene.drawForeground(ctx, canvas.width, canvas.height, elapsed);

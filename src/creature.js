@@ -64,15 +64,20 @@
 
   // ---- 2.5D 紙偶：純函式區（可在 Node 測，不碰 canvas） ----
 
-  // 地面角色的走路擺動。關鍵是 footYOffset 恆為 0——規格要求雙腳貼地，
-  // 走路靠的是腿部關節旋轉（見 walkPose），不是整張紙上下抖。
-  // 身體只允許極小幅度的重心傾斜與轉身時的水平壓縮。
+  // 地面角色的擺動。關鍵是 footYOffset 恆為 0——規格要求雙腳貼地，
+  // 不用整張紙上下抖來假裝走路。
+  //
+  // 動態來自 swayScaleY 的縱向縮放（2.5D 紙偶的呼吸感），不是腿部關節旋轉。
+  // 原本的做法是把掃描稿在 legTop 以下切成左右兩塊各自旋轉，但孩子畫的腿
+  // 沒有乾淨的左右分界，切開再轉腳就會分岔——實機驗收時看得很明顯。
+  // 縮放的錨點在腳底（見 draw()），所以放大縮小都不會讓角色離地或陷進草裡。
   function groundedMotionOffset(t, params) {
     const step = Math.sin(params.freq * t + (params.phase || 0));
     return {
       footYOffset: 0,
       rotation: 0.012 * step,
       turnScaleX: 0.94 + 0.06 * Math.abs(step),
+      swayScaleY: 1 + 0.03 * step,
     };
   }
 
@@ -139,17 +144,6 @@
 
   function randRange([min, max]) {
     return min + Math.random() * (max - min);
-  }
-
-  function walkPose(t, params) {
-    const step = Math.sin(params.freq * t + (params.phase || 0));
-    const maxAngle = params.maxAngle == null ? 0.105 : params.maxAngle;
-    return {
-      step,
-      leftAngle: step * maxAngle,
-      rightAngle: -step * maxAngle,
-      leftFront: step >= 0,
-    };
   }
 
   function drawImagePart(ctx, image, sx, sy, sw, sh, dx, dy, dw, dh) {
@@ -307,51 +301,6 @@
       this.updateVisual(dt);
     }
 
-    drawWalkingImage(ctx, t) {
-      const image = this.image;
-      const iw = image.width;
-      const ih = image.height;
-      const rig = this.species.swim.rig || { legLeft: 0.34, legRight: 0.66, legTop: 0.74 };
-      const legLeft = Math.max(0, Math.min(iw, rig.legLeft * iw));
-      const legRight = Math.max(legLeft, Math.min(iw, rig.legRight * iw));
-      const legTop = Math.max(0, Math.min(ih, rig.legTop * ih));
-      const legMiddle = (legLeft + legRight) / 2;
-      const dx = -this.renderWidth / 2;
-      const dy = -this.renderHeight / 2;
-      const xScale = this.renderWidth / iw;
-      const yScale = this.renderHeight / ih;
-      const pose = walkPose(t, { freq: this.freq, phase: this.phase, maxAngle: rig.maxAngle });
-
-      // 頭、身體、衣袍，以及腿部範圍以外的手杖／羊／魚保持完整。
-      drawImagePart(ctx, image, 0, 0, iw, legTop + 1, dx, dy, this.renderWidth, (legTop + 1) * yScale);
-      drawImagePart(ctx, image, 0, legTop, legLeft + 1, ih - legTop,
-        dx, dy + legTop * yScale, (legLeft + 1) * xScale, (ih - legTop) * yScale);
-      drawImagePart(ctx, image, legRight - 1, legTop, iw - legRight + 1, ih - legTop,
-        dx + (legRight - 1) * xScale, dy + legTop * yScale,
-        (iw - legRight + 1) * xScale, (ih - legTop) * yScale);
-
-      const drawLeg = (sx, sw, angle) => {
-        const pivotX = dx + (sx + sw / 2) * xScale;
-        const pivotY = dy + legTop * yScale;
-        ctx.save();
-        ctx.translate(pivotX, pivotY);
-        ctx.rotate(angle);
-        ctx.translate(-pivotX, -pivotY);
-        drawImagePart(ctx, image, sx, legTop, sw, ih - legTop,
-          dx + sx * xScale, pivotY, sw * xScale, (ih - legTop) * yScale);
-        ctx.restore();
-      };
-
-      // 往後的腿先畫、往前的腿後畫，交會時仍有自然的前後層次。
-      if (pose.leftFront) {
-        drawLeg(legMiddle, legRight - legMiddle, pose.rightAngle);
-        drawLeg(legLeft, legMiddle - legLeft, pose.leftAngle);
-      } else {
-        drawLeg(legLeft, legMiddle - legLeft, pose.leftAngle);
-        drawLeg(legMiddle, legRight - legMiddle, pose.rightAngle);
-      }
-    }
-
     // 手臂：繞肩膀（rig 的 pivot）旋轉一塊切片。角度來自 gesturePose，
     // 腳底完全不受影響。
     drawArm(ctx, arm, angle) {
@@ -390,8 +339,11 @@
       // 地面角色的 footYOffset 恆為 0；漂浮角色（天使）則整個往上浮一段再上下擺動，
       // 但錨點仍在地面，否則會被排到畫面外、名字也跟著被切掉。
       const hover = grounded ? 0 : this.amplitude;
+      // 縮放是繞角色中心做的，所以垂直錨點要跟著 scaleY 一起換算，
+      // 腳底才會固定落在 baseY，而不是隨著擺動上下浮動。
+      const bodyScaleY = grounded ? off.swayScaleY : off.scaleY;
       const y = grounded
-        ? this.baseY - this.renderHeight / 2 + off.footYOffset
+        ? this.baseY - (this.renderHeight / 2) * bodyScaleY + off.footYOffset
         : this.baseY - this.renderHeight / 2 - hover + off.yOffset;
       const facingRight = this.vx !== 0 ? this.vx > 0 : this.speed > 0;
       const opacity = this.opacity == null ? 1 : this.opacity;
@@ -416,8 +368,7 @@
       ctx.rotate(off.rotation * (facingRight ? 1 : -1));
       const flip = this.species.swim.noFlip ? 1 : (facingRight ? 1 : -1);
       const scaleX = grounded ? off.turnScaleX : off.scaleX;
-      const scaleY = grounded ? 1 : off.scaleY;
-      ctx.scale(flip * scaleX, scaleY);
+      ctx.scale(flip * scaleX, bodyScaleY);
 
       // 紙張厚度：兩層低透明度的偏移副本墊在底下，做出紙偶的邊緣層次。
       ctx.save();
@@ -428,8 +379,8 @@
       }
       ctx.restore();
 
-      if (grounded) this.drawWalkingImage(ctx, t);
-      else ctx.drawImage(this.image, -this.renderWidth / 2, -this.renderHeight / 2, this.renderWidth, this.renderHeight);
+      // 地面與空中角色都是整張紙一次畫完，不再切片。
+      ctx.drawImage(this.image, -this.renderWidth / 2, -this.renderHeight / 2, this.renderWidth, this.renderHeight);
 
       this.drawArm(ctx, rig.leftArm, pose.leftArmAngle);
       this.drawArm(ctx, rig.rightArm, pose.rightArmAngle);
@@ -440,7 +391,6 @@
   const api = {
     Creature,
     motionOffset,
-    walkPose,
     groundedMotionOffset,
     displaySize,
     collisionSize,

@@ -3,7 +3,6 @@ const assert = require('node:assert/strict');
 const {
   Creature,
   motionOffset,
-  walkPose,
   groundedMotionOffset,
   transitionOpacity,
   displaySize,
@@ -40,14 +39,14 @@ test('未知樣式會退回 fish', () => {
 });
 
 function recordingCtx() {
-  const calls = { scale: [], fillText: [], strokeText: [], drawImage: 0 };
+  const calls = { scale: [], translate: [], fillText: [], strokeText: [], drawImage: 0, images: [] };
   const ctx = {
     globalAlpha: 1, fillStyle: '', strokeStyle: '', font: '', textAlign: '',
     textBaseline: '', lineWidth: 0,
-    save() {}, restore() {}, translate() {}, rotate() {},
+    save() {}, restore() {}, translate(x, y) { calls.translate.push([x, y]); }, rotate() {},
     beginPath() {}, ellipse() {}, fill() {},
     strokeText(text) { calls.strokeText.push(text); },
-    drawImage() { calls.drawImage++; },
+    drawImage(...args) { calls.drawImage++; calls.images.push(args); },
     fillText(text) { calls.fillText.push(text); },
     scale(x, y) { calls.scale.push([x, y]); },
   };
@@ -161,6 +160,56 @@ test('地面人物走路時腳底完全不產生垂直位移', () => {
   }
 });
 
+test('地面角色的動態來自 2.5D 縮放擺動，不是上下抖動', () => {
+  // 腿部關節旋轉已經拿掉：掃描稿沒有乾淨的腿部分界，切開再轉會讓腳分岔。
+  // 動態改由整體縱向縮放提供，錨點在腳底，所以 footYOffset 仍然恆為 0。
+  let min = Infinity, max = -Infinity, sum = 0, n = 0;
+  for (let t = 0; t < 4; t += 0.01) {
+    const off = groundedMotionOffset(t, { freq: 6, phase: 0.4 });
+    assert.equal(off.footYOffset, 0);
+    min = Math.min(min, off.swayScaleY);
+    max = Math.max(max, off.swayScaleY);
+    sum += off.swayScaleY;
+    n++;
+  }
+  assert.ok(max - min > 0.02, `擺動幅度只有 ${(max - min).toFixed(4)}，畫面上看不出角色在動`);
+  assert.ok(min >= 0.95 && max <= 1.05, `擺動超出合理範圍 ${min}~${max}，紙偶會像在抽搐`);
+  assert.ok(Math.abs(sum / n - 1) < 0.01, '擺動平均值要接近 1，否則角色整體會偏高或偏矮');
+});
+
+test('地面角色的身體一次畫完，不再切成腿部切片各自旋轉', () => {
+  // 這是拿掉走路動畫的核心理由：孩子畫的腿沒有乾淨的左右分界，
+  // 在 legTop 以下切兩塊各自旋轉，腳看起來會分岔。
+  const { ctx, calls } = recordingCtx();
+  const creature = makeCreature({ spawn: { x: 400, baseY: 700 } });
+  creature.opacity = 1;
+  creature.currentGesture = null; // 手臂不動，只看身體怎麼畫
+  creature.draw(ctx, 0.3);
+
+  // 紙張厚度兩層 + 身體本體一次 = 3 次繪製，不該再出現局部切片
+  assert.equal(calls.images.length, 3, `身體應該一次畫完，實際畫了 ${calls.images.length} 次`);
+  for (const args of calls.images) {
+    assert.equal(args.length, 5,
+      `不該再有取局部來源矩形的切片繪製：${JSON.stringify(args.slice(1))}`);
+  }
+});
+
+test('地面角色縮放擺動時，腳底仍然牢牢釘在 baseY', () => {
+  // 縮放的錨點是角色中心，所以垂直位置必須跟著 swayScaleY 一起換算；
+  // 少了這一步，角色會隨著擺動一下離地、一下陷進草裡。
+  const creature = makeCreature({ spawn: { x: 400, baseY: 700 } });
+  creature.opacity = 1;
+  for (let t = 0; t < 2; t += 1 / 60) {
+    const { ctx, calls } = recordingCtx();
+    creature.draw(ctx, t);
+    const translateY = calls.translate[0][1];
+    const scaleY = calls.scale[0][1];
+    const footY = translateY + (creature.renderHeight / 2) * scaleY;
+    assert.ok(Math.abs(footY - creature.baseY) < 0.001,
+      `t=${t.toFixed(2)} 腳底畫在 ${footY}，應該貼在 ${creature.baseY}`);
+  }
+});
+
 test('顯示尺寸依裁切後可見圖片計算，且人物高度足以辨識塗色', () => {
   // 直式與橫式的原稿都要換算到同一個目標高度，不因原稿比例而忽大忽小。
   assert.deepEqual(displaySize({ width: 210, height: 420 }, 1600, 900, 1), { width: 117, height: 234 });
@@ -209,15 +258,6 @@ test('招呼手勢只回傳肢體角度，不改腳底位置', () => {
 });
 
 
-test('自然踏步時左右腿角度相反，半個週期後交換前後腳', () => {
-  const a = walkPose(0.25, { freq: Math.PI * 2, phase: 0, maxAngle: 0.1 });
-  const b = walkPose(0.75, { freq: Math.PI * 2, phase: 0, maxAngle: 0.1 });
-  assert.equal(a.leftAngle, -a.rightAngle);
-  assert.equal(b.leftAngle, -b.rightAngle);
-  assert.ok(a.leftFront);
-  assert.ok(!b.leftFront);
-  assert.ok(a.leftAngle > 0 && b.leftAngle < 0);
-});
 
 test('setMovement 要把移動層的整包狀態帶回角色，否則繞行認定每幀被丟掉', () => {
   // display.html 是把 Creature 實例直接餵給 steerCharacter 的，所以 steerCharacter
