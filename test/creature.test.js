@@ -155,10 +155,13 @@ test('地面人物走路時腳底完全不產生垂直位移', () => {
 
 test('顯示尺寸依裁切後可見圖片計算，且人物高度足以辨識塗色', () => {
   // 直式與橫式的原稿都要換算到同一個目標高度，不因原稿比例而忽大忽小。
-  assert.deepEqual(displaySize({ width: 210, height: 420 }, 1600, 900, 1), { width: 152, height: 304 });
-  assert.deepEqual(displaySize({ width: 420, height: 210 }, 1600, 900, 1), { width: 608, height: 304 });
-  // 高度至少要有場景高度的 24%，小朋友才看得清楚自己畫的細節
-  assert.ok(displaySize({ width: 210, height: 420 }, 1600, 900, 1).height >= 900 * 0.24);
+  assert.deepEqual(displaySize({ width: 210, height: 420 }, 1600, 900, 1), { width: 117, height: 234 });
+  assert.deepEqual(displaySize({ width: 420, height: 210 }, 1600, 900, 1), { width: 468, height: 234 });
+  // 高度至少要有場景高度的 24%，小朋友才看得清楚自己畫的細節。
+  // 上限也要顧：太大時可行走的草地帶擠不下規格要求的 15 位。
+  const height = displaySize({ width: 210, height: 420 }, 1600, 900, 1).height;
+  assert.ok(height >= 900 * 0.24, `高度 ${height} 低於場景高度的 24%`);
+  assert.ok(height <= 900 * 0.28, `高度 ${height} 過大，草地帶會擠不下 15 位`);
 });
 
 test('遠景與近景尺寸維持可辨識的 2.5D 景深範圍', () => {

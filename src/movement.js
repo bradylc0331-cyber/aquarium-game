@@ -4,7 +4,12 @@
 
   // 地面足跡的寬度相對角色可見寬度的比例（腳站的範圍比整個人窄）。
   const FOOTPRINT_WIDTH_FACTOR = 0.42;
-  // 地面上的圓在 2.5D 俯角下被壓扁的比例。0.4 對應一個自然的俯視角度。
+  // 地面上的圓在 2.5D 俯角下被壓扁的比例。
+  //
+  // 試過拉到 0.7 想讓垂直方向拉開一點，但可行走區的高度有限，垂直間距一變大
+  // 容量就從 15 位掉到 6 位，直接違反規格。畫面上看到的「疊成一柱」其實是
+  // findSafeSpawn 把角色都放在同一條邊緣線上造成的，不是壓扁比例的問題——
+  // 角色開始漫遊後就會散開。所以這裡維持 0.4。
   const GROUND_PERSPECTIVE = 0.4;
 
   // 復位搜尋（recoverSafePosition）的有限搜尋空間定義。
@@ -34,14 +39,22 @@
       throw new RangeError('width and height must be finite positive numbers');
     }
 
+    // 這些比例是照 assets/backgrounds/bible-world.png 量出來的，換背景圖要重量。
+    //
+    // top 取 0.60 而不是更高：0.45 那條線在插畫裡已經是遠處的山丘與城鎮，
+    // 角色站上去會變成「站在山上的巨人」，透視完全不對。0.60 才是近景草地的起點。
     return {
       left: width * 0.04,
       right: width * 0.96,
-      top: height * 0.45,
-      bottom: height * 0.91,
+      top: height * 0.60,
+      bottom: height * 0.93,
       obstacles: [
-        { x: width * 0.53, y: height * 0.48, width: width * 0.13, height: height * 0.23 },
-        { x: width * 0.62, y: height * 0.66, width: width * 0.16, height: height * 0.18 },
+        // 河流：從右上斜切到中央，用兩塊矩形近似它在草地帶內的部分
+        { x: width * 0.60, y: height * 0.58, width: width * 0.10, height: height * 0.16 },
+        { x: width * 0.63, y: height * 0.70, width: width * 0.14, height: height * 0.14 },
+        // 前景的兩棵大橄欖樹樹幹：角色不但不該穿過，還會被錯誤地畫在樹前面
+        { x: width * 0.05, y: height * 0.62, width: width * 0.11, height: height * 0.30 },
+        { x: width * 0.88, y: height * 0.62, width: width * 0.10, height: height * 0.30 },
       ],
     };
   }

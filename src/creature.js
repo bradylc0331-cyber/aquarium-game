@@ -78,10 +78,14 @@
 
   // 依裁切後的可見人物比例換算顯示尺寸。以「高度」為基準，所以直式與橫式原稿
   // 都會落在同一個可辨識的高度範圍，不會因為原稿比例而忽大忽小。
+  //
+  // 目標高度取畫面高的 ~26%（規格要求的下限是 24%）。原本取到 34%，角色大到
+  // 可行走的草地帶只擠得下 10 位，規格要求的 15 位達不到；而 34% 在畫面上也
+  // 像是貼著鏡頭站，跟遠處的城鎮完全不成比例。26% 仍然看得清楚孩子的塗色。
   function displaySize(image, canvasWidth, canvasHeight, depthScale) {
     const targetHeight = Math.max(
-      canvasHeight * 0.24,
-      Math.min(canvasHeight * 0.34, canvasWidth * 0.19),
+      canvasHeight * 0.20,
+      Math.min(canvasHeight * 0.26, canvasWidth * 0.15),
     );
     const height = Math.round(targetHeight * depthScale * 2) / 2;
     return { width: Math.round(height * image.width / image.height), height };
@@ -333,10 +337,13 @@
         ? groundedMotionOffset(t, { freq: this.freq, phase: this.phase })
         : motionOffset(this.style, t, { amplitude: this.amplitude, freq: this.freq, phase: this.phase });
 
-      // 地面角色：baseY 就是腳底，且 footYOffset 恆為 0——走路與手勢都不讓腳離地。
+      // 所有角色都以 baseY（腳底）為錨點——移動控制器給的就是地面座標。
+      // 地面角色的 footYOffset 恆為 0；漂浮角色（天使）則整個往上浮一段再上下擺動，
+      // 但錨點仍在地面，否則會被排到畫面外、名字也跟著被切掉。
+      const hover = grounded ? 0 : this.amplitude;
       const y = grounded
         ? this.baseY - this.height / 2 + off.footYOffset
-        : this.baseY + off.yOffset;
+        : this.baseY - this.height / 2 - hover + off.yOffset;
       const facingRight = this.vx !== 0 ? this.vx > 0 : this.speed > 0;
       const opacity = this.opacity == null ? 1 : this.opacity;
       if (opacity <= 0) return;
@@ -380,9 +387,8 @@
       ctx.restore();
 
       // 規格：角色下方只顯示人物名稱，不顯示動作文字。
-      // 地面角色的 baseY 就是腳底；漂浮角色（天使）以圖片中心定位，名字要再往下挪半個身高。
-      const labelY = grounded ? this.baseY + 10 : y + this.height / 2 + 10;
-      drawCharacterName(ctx, this.species.name, this.x, labelY,
+      // 名字一律畫在地面錨點下方，漂浮角色也一樣——名字跟著身體浮會讀不穩。
+      drawCharacterName(ctx, this.species.name, this.x, this.baseY + 10,
         Math.max(16, this.width * 0.12), opacity);
     }
   }

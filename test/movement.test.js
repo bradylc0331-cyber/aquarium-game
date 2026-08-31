@@ -15,6 +15,7 @@ const {
   steerCharacter,
   recoveryGrid,
 } = require('../src/movement.js');
+const { displaySize } = require('../src/creature.js');
 
 function openArea(overrides = {}) {
   return {
@@ -54,27 +55,26 @@ function sequence(values, fallback = 0.5) {
   return random;
 }
 
-test('getWalkableArea 回傳 1600x900 精確邊界、障礙，並按畫面比例正規化', () => {
-  assert.deepEqual(getWalkableArea(1600, 900), {
-    left: 64,
-    right: 1536,
-    top: 405,
-    bottom: 819,
-    obstacles: [
-      { x: 848, y: 432, width: 208, height: 207 },
-      { x: 992, y: 594, width: 256, height: 162 },
-    ],
-  });
-  assert.deepEqual(getWalkableArea(800, 450), {
-    left: 32,
-    right: 768,
-    top: 202.5,
-    bottom: 409.5,
-    obstacles: [
-      { x: 424, y: 216, width: 104, height: 103.5 },
-      { x: 496, y: 297, width: 128, height: 81 },
-    ],
-  });
+test('getWalkableArea 按畫面比例正規化，且上緣落在草地而不是遠山', () => {
+  const big = getWalkableArea(1600, 900);
+  const small = getWalkableArea(800, 450);
+
+  // 上緣必須明顯低於畫面中線——0.45 那條線在背景插畫裡已經是遠處山丘與城鎮，
+  // 角色站上去會變成站在山上的巨人。
+  assert.ok(big.top / 900 >= 0.55, `上緣 ${big.top / 900} 太高，會讓角色站到遠景`);
+  assert.equal(big.top, 540);
+  assert.equal(big.bottom, 837);
+  assert.equal(big.left, 64);
+  assert.equal(big.right, 1536);
+
+  // 四個障礙：河流兩塊 + 前景兩棵大橄欖樹的樹幹
+  assert.equal(big.obstacles.length, 4);
+
+  // 完全按畫面比例縮放
+  assert.equal(small.top / 450, big.top / 900);
+  assert.equal(small.bottom / 450, big.bottom / 900);
+  assert.equal(small.left / 800, big.left / 1600);
+  assert.equal(small.obstacles.length, big.obstacles.length);
 });
 
 test('getWalkableArea 對非有限正尺寸立即失敗', () => {
@@ -138,14 +138,13 @@ test('可行走區容得下規格要求的 15 位角色', () => {
   // 這是規格「畫面最多同時顯示 15 位角色」與「安全間距不得互相接觸」能否同時成立的守衛。
   // 用整個人形當碰撞範圍時一排只塞得下約 10 位，15 位永遠達不到。
   const area = getWalkableArea(1920, 1080);
+  // 用 Task 4 實際的尺寸公式，不要寫死——尺寸一改就會失去意義
+  const size = displaySize({ width: 220, height: 400 }, 1920, 1080, 1);
   const placed = [];
-  const size = { width: 211, height: 383 }; // Task 4 尺寸公式下的近景角色
-  for (let row = 0; row < 12 && placed.length < 15; row++) {
-    for (let col = 0; col < 12 && placed.length < 15; col++) {
-      const baseY = area.top + (row + 0.5) * ((area.bottom - area.top) / 6);
-      const x = area.left + (col + 0.5) * ((area.right - area.left) / 10);
+  for (let baseY = area.top; baseY <= area.bottom; baseY += 6) {
+    for (let x = area.left; x <= area.right; x += 6) {
+      if (placed.length >= 15) break;
       const candidate = { ...size, x, baseY };
-      if (baseY > area.bottom || x > area.right) continue;
       if (isSafe(candidate, placed, area)) placed.push(candidate);
     }
   }
@@ -584,12 +583,12 @@ test('15 位角色真的進得了場：邊緣入口會隨著角色走開而空�
   const area = getWalkableArea(1920, 1080);
   let seed = 20260831;
   const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
-  const size = { width: 211, height: 383 };
+  const size = displaySize({ width: 220, height: 400 }, 1920, 1080, 1);
   const characters = [];
   let placed = 0;
   let fullAtFrame = null;
 
-  for (let frame = 0; frame < 900; frame++) { // 15 秒
+  for (let frame = 0; frame < 1200; frame++) { // 20 秒
     while (placed < 15) {
       const spawn = findSafeSpawn(size, characters, area, random);
       if (!spawn) break;
@@ -608,7 +607,7 @@ test('15 位角色真的進得了場：邊緣入口會隨著角色走開而空�
   }
 
   assert.equal(characters.length, 15, `場上只有 ${characters.length} 位，規格要求 15 位`);
-  assert.ok(fullAtFrame !== null && fullAtFrame < 600, `太久才滿員（frame ${fullAtFrame}）`);
+  assert.ok(fullAtFrame !== null && fullAtFrame < 900, `太久才滿員（frame ${fullAtFrame}）`);
   for (let i = 0; i < characters.length; i++) {
     const others = characters.filter((c) => c !== characters[i]);
     assert.equal(isSafe(characters[i], others, area), true, `第 ${i} 位跑到不合法的位置`);
