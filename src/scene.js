@@ -219,8 +219,14 @@
     const h = canvasHeight || 900;
     const scale = sheepScale(sheep, h);
     const bob = sheep.mode === 'walking' ? Math.sin(t * 5) * 1.5 : 0;
-    const headDrop = sheep.mode === 'grazing' ? 13 : 0;
+    const grazing = sheep.mode === 'grazing';
     const facing = sheep.direction < 0 ? -1 : 1;
+
+    // 幾何：身體抬高到 y=-30，腿才有 13px 可看。之前身體中心在 -22、半徑 18，
+    // 腿只剩 7px，遠看就是一顆蛋下面兩根刺。
+    const bodyY = -30;
+    const rx = 26;
+    const ry = 16;
 
     ctx.save();
     ctx.translate(sheep.x, sheep.baseY + bob * scale);
@@ -235,43 +241,75 @@
     ctx.fill();
     ctx.restore();
 
-    // 腿：要夠深夠粗才看得出來是羊而不是一顆白蛋
+    // 腿：夠長夠深才看得出是四足動物。走路時前後擺動。
     ctx.strokeStyle = '#6b5335';
-    ctx.lineWidth = 3.5;
+    ctx.lineWidth = 3.2;
     ctx.lineCap = 'round';
-    for (const legX of [-15, -7, 8, 15]) {
+    for (const legX of [-16, -8, 9, 16]) {
+      const swing = sheep.mode === 'walking' ? Math.sin(t * 5 + legX) * 3.5 : 0;
       ctx.beginPath();
-      ctx.moveTo(legX, -10);
-      ctx.lineTo(legX + (sheep.mode === 'walking' ? Math.sin(t * 5 + legX) * 3 : 0), 0);
+      ctx.moveTo(legX, bodyY + ry - 3);
+      ctx.lineTo(legX + swing, 0);
       ctx.stroke();
     }
 
-    // 羊毛：取背景插畫的暖白，不是純白，才不會在夕陽色調裡跳出來。
-    // 輪廓要有足夠對比，否則在亮草地上整隻糊掉。
+    // 羊毛的輪廓要是**蓬鬆的**，不能是一個光滑的橢圓——光滑橢圓在遠處就是一顆蛋。
+    // 用一圈二次曲線在橢圓外緣鼓出來，接成單一封閉路徑，這樣填色與描邊都只有
+    // 一條外框，不會有內部線條。
+    const bumps = 11;
+    const bulge = 4.2;
+    ctx.beginPath();
+    for (let i = 0; i < bumps; i++) {
+      const a0 = (i / bumps) * Math.PI * 2;
+      const a1 = ((i + 1) / bumps) * Math.PI * 2;
+      const am = (a0 + a1) / 2;
+      const x1 = Math.cos(a1) * rx;
+      const y1 = bodyY + Math.sin(a1) * ry;
+      if (i === 0) ctx.moveTo(Math.cos(a0) * rx, bodyY + Math.sin(a0) * ry);
+      ctx.quadraticCurveTo(Math.cos(am) * (rx + bulge), bodyY + Math.sin(am) * (ry + bulge), x1, y1);
+    }
+    ctx.closePath();
+    // 羊毛取背景插畫的暖白，不是純白，才不會在夕陽色調裡跳出來
     ctx.fillStyle = '#f4ecd8';
+    ctx.fill();
     ctx.strokeStyle = 'rgba(107, 83, 53, 0.85)';
     ctx.lineWidth = 2.2;
-    ctx.beginPath();
-    ctx.ellipse(0, -22, 28, 18, 0, 0, Math.PI * 2);
-    ctx.fill();
     ctx.stroke();
 
     // 背上一點暖陰影，讓羊毛看起來有體積而不是一片白
     ctx.save();
-    ctx.globalAlpha = 0.22;
+    ctx.globalAlpha = 0.20;
     ctx.fillStyle = '#c8ac82';
     ctx.beginPath();
-    ctx.ellipse(-4, -15, 20, 8, 0, 0, Math.PI * 2);
+    ctx.ellipse(-5, bodyY + 6, 18, 7, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
-    // 頭與耳朵
+    // 頭要**離開身體**並且有脖子，否則整團連在一起就讀不出是頭。
+    // 吃草時頭低下去靠近地面，走路時抬起來。
+    // 吃草時頭要伸到**身體前方的地面**，不是縮到肚子底下——縮在底下看起來
+    // 像掛了一個鈴鐺，讀不出是在吃草。
+    const headX = grazing ? rx + 11 : rx + 5;
+    const headY = grazing ? -6 : bodyY - 6;
+    ctx.strokeStyle = '#7d6446';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(rx - 8, bodyY + (grazing ? 4 : -2));
+    ctx.lineTo(headX - 2, headY - (grazing ? 4 : 0));
+    ctx.stroke();
+
     ctx.fillStyle = '#7d6446';
     ctx.beginPath();
-    ctx.ellipse(27, -25 + headDrop, 10, 12, 0.15, 0, Math.PI * 2);
+    ctx.ellipse(headX, headY, 7.5, 9.5, grazing ? 1.15 : 0.2, 0, Math.PI * 2);
     ctx.fill();
+    // 耳朵往後翹，跟頭分得開
     ctx.beginPath();
-    ctx.ellipse(20, -33 + headDrop * 0.7, 6, 3.5, -0.5, 0, Math.PI * 2);
+    ctx.ellipse(headX - (grazing ? 4 : 7), headY - (grazing ? 8 : 5), 5, 2.8, grazing ? 0.5 : -0.6, 0, Math.PI * 2);
+    ctx.fill();
+    // 眼睛：一個小亮點就足以讓臉「有方向」
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath();
+    ctx.ellipse(headX + (grazing ? 1 : 2), headY - (grazing ? 4 : 2), 1.4, 1.4, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
