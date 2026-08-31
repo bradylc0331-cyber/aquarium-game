@@ -2,6 +2,19 @@
   const VERTICAL_SPEED_FACTOR = 0.55;
   const COLLISION_EPSILON = 1e-12;
 
+  // 復位搜尋（recoverSafePosition）的有限搜尋空間定義。
+  // 步長取角色安全橢圓短半徑的一半：夠細，鑽得過只有角色寬度的縫隙。
+  const RECOVERY_STEP_FACTOR = 0.5;
+  const RECOVERY_MIN_STEP = 6;
+  const RECOVERY_MAX_STEP = 48;
+  // 節點預算。復位是在動畫 frame 內同步跑的，必須有上限；超過就讓步長變粗，
+  // 而不是讓搜尋無限展開。
+  const RECOVERY_MAX_NODES = 6000;
+  const NEIGHBOR_OFFSETS = [
+    [1, 0], [-1, 0], [0, 1], [0, -1],
+    [1, 1], [1, -1], [-1, 1], [-1, -1],
+  ];
+
   function finite(value) {
     return Number.isFinite(value);
   }
@@ -249,37 +262,72 @@
     return null;
   }
 
-  function recoveryPathIsClear(anchor, candidate, self, others, area) {
+  // 復位途中「不准碰到」的東西。
+  //
+  // 從 anchor 出發時就已經重疊的角色與障礙要排除掉——卡在障礙裡的角色本來就得先從
+  // 裡面走出來，把它們算成阻擋等於宣告永遠無解。其餘的角色與障礙一律不得穿越。
+  // 角色在復位期間不會移動，所以這裡先把要比對的橢圓算好，避免熱迴圈重複配置。
+  function recoveryGuards(anchor, self, others, area) {
     const anchorSpace = personalSpace({ ...self, x: anchor.x, baseY: anchor.baseY });
-    const initialCharacters = new Set(
-      others.filter((character) => spacesOverlap(anchorSpace, personalSpace(character))),
-    );
-    const initialObstacles = new Set(
-      area.obstacles.filter((obstacle) => hitsObstacle(anchorSpace, obstacle)),
-    );
-    const distance = Math.hypot(candidate.x - anchor.x, candidate.baseY - anchor.baseY);
-    const dimensions = personalSpace(self);
+    return {
+      characterSpaces: others
+        .map(personalSpace)
+        .filter((space) => !spacesOverlap(anchorSpace, space)),
+      obstacles: area.obstacles.filter((obstacle) => !hitsObstacle(anchorSpace, obstacle)),
+    };
+  }
+
+  // 逐段取樣檢查一條直線位移，確認它沒有碰到 guards 裡的任何角色或障礙。
+  function segmentIsClear(from, to, self, dimensions, guards) {
+    const distance = Math.hypot(to.x - from.x, to.baseY - from.baseY);
     const stepLength = Math.max(1, Math.min(dimensions.radiusX, dimensions.radiusY) * 0.45);
     const steps = Math.max(1, Math.ceil(distance / stepLength));
 
     for (let step = 1; step <= steps; step++) {
       const portion = step / steps;
-      const point = {
+      const space = personalSpace({
         ...self,
-        x: anchor.x + (candidate.x - anchor.x) * portion,
-        baseY: anchor.baseY + (candidate.baseY - anchor.baseY) * portion,
-      };
-      const space = personalSpace(point);
-      if (others.some((character) => (
-        !initialCharacters.has(character) && spacesOverlap(space, personalSpace(character))
-      ))) return false;
-      if (area.obstacles.some((obstacle) => (
-        !initialObstacles.has(obstacle) && hitsObstacle(space, obstacle)
-      ))) return false;
+        x: from.x + (to.x - from.x) * portion,
+        baseY: from.baseY + (to.baseY - from.baseY) * portion,
+      });
+      if (guards.characterSpaces.some((other) => spacesOverlap(space, other))) return false;
+      if (guards.obstacles.some((obstacle) => hitsObstacle(space, obstacle))) return false;
     }
     return true;
   }
 
+  // 復位搜尋的網格解析度。步長由角色安全橢圓的短半徑決定（走得夠細才鑽得過窄縫），
+  // 但同時受上下限與 RECOVERY_MAX_NODES 節點預算限制——大畫面配上很小的角色時，
+  // 步長會自動放大，讓搜尋空間維持有限且可在一個 frame 內走完。
+  function recoveryGrid(self, area) {
+    const dimensions = personalSpace(self);
+    const minRadius = Math.min(dimensions.radiusX, dimensions.radiusY);
+    const width = area.right - area.left;
+    const height = area.bottom - area.top;
+    let step = Math.min(
+      RECOVERY_MAX_STEP,
+      Math.max(RECOVERY_MIN_STEP, minRadius * RECOVERY_STEP_FACTOR),
+    );
+
+    // 節點數 = (寬/步長 + 1) x (高/步長 + 1)。超出預算就等比放大步長，
+    // 寧可解析度變粗，也不要讓同步搜尋把 Canvas frame 卡住。
+    const nodesFor = (candidate) => (
+      (Math.floor(width / candidate) + 1) * (Math.floor(height / candidate) + 1)
+    );
+    if (nodesFor(step) > RECOVERY_MAX_NODES) {
+      const scaled = Math.sqrt((width * height) / RECOVERY_MAX_NODES);
+      step = Math.max(step, scaled);
+      while (nodesFor(step) > RECOVERY_MAX_NODES) step *= 1.25;
+    }
+
+    return { step };
+  }
+
+  // 有限解析度的 8-neighbor BFS。
+  //
+  // 語意（重要）：`blocked: true` 的意思是「在這個網格解析度下，沒有一條不穿越其他
+  // 角色或障礙的路徑可以走到安全節點」，**不是**數學上證明連續空間中不存在安全點。
+  // 連續空間的不存在性無法用有限搜尋證明；規格與測試都以此解析度為準。
   function recoverSafePosition(self, others, area) {
     const anchor = clampPosition(self, area);
     const resultAt = (position) => ({
@@ -290,45 +338,62 @@
       vy: 0,
       blocked: false,
     });
-    const anchorCharacter = { ...self, x: anchor.x, baseY: anchor.baseY };
-    if (isSafe(anchorCharacter, others, area)) return resultAt(anchor);
+    if (isSafe({ ...self, x: anchor.x, baseY: anchor.baseY }, others, area)) return resultAt(anchor);
 
+    const guards = recoveryGuards(anchor, self, others, area);
     const dimensions = personalSpace(self);
-    const stepDistance = Math.max(8, Math.min(dimensions.radiusX, dimensions.radiusY) * 0.5);
-    const targetDx = self.targetX - anchor.x;
-    const targetDy = self.targetY - anchor.baseY;
-    const targetLength = Math.hypot(targetDx, targetDy);
-    const diagonal = Math.SQRT1_2;
-    const directions = [];
-    if (targetLength > 0) directions.push([targetDx / targetLength, targetDy / targetLength]);
-    directions.push(
-      [1, 0], [-1, 0], [0, 1], [0, -1],
-      [diagonal, diagonal], [diagonal, -diagonal],
-      [-diagonal, diagonal], [-diagonal, -diagonal],
-    );
-    const areaDiagonal = Math.hypot(area.right - area.left, area.bottom - area.top);
-    const maxRings = Math.min(64, Math.max(1, Math.ceil(areaDiagonal / stepDistance)));
-    const seen = new Set([`${anchor.x},${anchor.baseY}`]);
+    const { step } = recoveryGrid(self, area);
+    const positionAt = (gx, gy) => clampPosition({
+      ...self,
+      x: anchor.x + gx * step,
+      baseY: anchor.baseY + gy * step,
+    }, area);
 
-    for (let ring = 1; ring <= maxRings; ring++) {
-      for (const [directionX, directionY] of directions) {
-        const position = clampPosition({
-          ...self,
-          x: anchor.x + directionX * stepDistance * ring,
-          baseY: anchor.baseY + directionY * stepDistance * ring,
-        }, area);
-        const key = `${position.x},${position.baseY}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const candidate = { ...self, x: position.x, baseY: position.baseY };
-        if (
-          isSafe(candidate, others, area)
-          && recoveryPathIsClear(anchor, candidate, self, others, area)
-        ) return resultAt(position);
+    // 網格座標的有限範圍：涵蓋整個可行走區域，並多留一圈讓 clamp 後的邊界位置也走得到。
+    // 沒有這個界線，BFS 會往區域外無限展開，而那些格子 clamp 後全部擠在同一批邊界點上，
+    // 白白吃掉節點預算、反而漏掉區域內部真正的安全點。
+    const minGx = Math.ceil((area.left - anchor.x) / step) - 1;
+    const maxGx = Math.floor((area.right - anchor.x) / step) + 1;
+    const minGy = Math.ceil((area.top - anchor.baseY) / step) - 1;
+    const maxGy = Math.floor((area.bottom - anchor.baseY) / step) + 1;
+
+    // 以網格座標去重（不是以 clamp 後的位置），確保邊界格仍能各自往外展開。
+    const visited = new Set(['0,0']);
+    let frontier = [{ gx: 0, gy: 0, position: anchor }];
+    let expanded = 0;
+
+    while (frontier.length > 0 && expanded < RECOVERY_MAX_NODES) {
+      const nextFrontier = [];
+      let best = null;
+
+      for (const node of frontier) {
+        expanded++;
+        for (const [dx, dy] of NEIGHBOR_OFFSETS) {
+          const gx = node.gx + dx;
+          const gy = node.gy + dy;
+          if (gx < minGx || gx > maxGx || gy < minGy || gy > maxGy) continue;
+          const key = `${gx},${gy}`;
+          if (visited.has(key)) continue;
+          visited.add(key);
+
+          const position = positionAt(gx, gy);
+          if (!segmentIsClear(node.position, position, self, dimensions, guards)) continue;
+
+          if (isSafe({ ...self, x: position.x, baseY: position.baseY }, others, area)) {
+            // 同一層裡挑歐氏距離最近的，復位才不會無謂地跳很遠。
+            const distance = Math.hypot(position.x - anchor.x, position.baseY - anchor.baseY);
+            if (!best || distance < best.distance) best = { position, distance };
+          } else {
+            nextFrontier.push({ gx, gy, position });
+          }
+        }
       }
+
+      if (best) return resultAt(best.position);
+      frontier = nextFrontier;
     }
 
-    return { ...resultAt(anchor), vx: 0, vy: 0, blocked: true };
+    return { ...resultAt(anchor), blocked: true };
   }
 
   function steerCharacter(self, characters, area, dt) {

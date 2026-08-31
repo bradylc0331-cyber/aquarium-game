@@ -291,6 +291,88 @@ test('steerCharacter 以 Number.MIN_VALUE recovery 時仍回傳有限速度與�
   assert.equal(isSafe(result, [], area), true);
 });
 
+// 這組幾何是 off-axis recovery 的 regression 守衛。
+//
+// O_init 蓋住整個左半邊，self 起點在裡面（初始重疊，允許往外離開）。右半邊只留一條
+// y ∈ (150, 405) 的自由帶，且這條帶子與 O_init 直接相連，所以從起點有一整片直線可達、
+// 完全不碰「非初始障礙」的安全區。
+//
+// 但這條帶子刻意避開所有「從 anchor 出發的固定射線」會落到的點：
+//   水平 [1,0]              → baseY 恆為 400，橢圓下緣 410 > 405，戳進 O_bottom
+//   反對角 [√½,-√½]         → 走到 x > 670 時 baseY 已 ≤ 219.8，橢圓上緣戳進 O_top
+//   主對角 [√½,√½]          → baseY 只會 > 400，永遠落在帶子下方
+//   垂直與向左的四條        → 一路留在 O_init 內
+//   target 方向             → 指向右下 (960,700)，同樣落在帶子下方
+//
+// 因此安全出口只存在於非 0°／45° 的斜向；任何「固定角度射線」的搜尋都會漏掉它。
+function offAxisPocketArea() {
+  return {
+    left: 0,
+    right: 1000,
+    top: 0,
+    bottom: 800,
+    obstacles: [
+      { x: 0, y: 0, width: 640, height: 800 },
+      { x: 640, y: 0, width: 360, height: 150 },
+      { x: 640, y: 405, width: 360, height: 395 },
+    ],
+  };
+}
+
+test('recovery 找得到只在斜向開口外的安全點，不得誤報 blocked', () => {
+  const area = offAxisPocketArea();
+  const self = character({ x: 500, baseY: 400, targetX: 960, targetY: 700 });
+
+  // 前提一：起點確實不安全，而且自由帶內真的存在大量安全點（不是單點巧合）。
+  assert.equal(isSafe(self, [], area), false);
+  let safeSamples = 0;
+  for (let x = 645; x <= 970; x += 5) {
+    for (let baseY = 150; baseY <= 405; baseY += 5) {
+      if (isSafe({ ...self, x, baseY }, [], area)) safeSamples++;
+    }
+  }
+  assert.ok(safeSamples > 500, `自由帶應有大片安全區，實際取樣到 ${safeSamples} 點`);
+
+  const result = steerCharacter(self, [self], area, 0.1);
+
+  assert.equal(result.blocked, false, '存在可達安全點時不得回報 blocked');
+  assert.equal(isSafe(result, [], area), true);
+  assert.ok(['x', 'baseY', 'vx', 'vy'].every((key) => Number.isFinite(result[key])));
+});
+
+test('recovery 會繞過障礙走 staircase 路徑，不穿越非初始障礙', () => {
+  // 只有一道牆，牆上開一個縫；縫的位置讓 anchor 到安全區的直線一定會切到牆角，
+  // 因此必須真的「先上再右」繞過去，不能靠單一直線射線解決。
+  const area = openArea({
+    obstacles: [
+      { x: 400, y: 0, width: 60, height: 520 },
+      { x: 400, y: 640, width: 60, height: 160 },
+    ],
+  });
+  const self = character({ x: 200, baseY: 700, targetX: 900, targetY: 700 });
+
+  const result = steerCharacter(self, [self], area, 0.1);
+
+  assert.equal(isSafe(result, [], area), true);
+  for (const obstacle of area.obstacles) {
+    assert.equal(hitsObstacle(personalSpace(result), obstacle), false);
+  }
+});
+
+test('recovery 在大畫面配小角色時仍受節點預算限制，不會卡住 frame', () => {
+  // 很大的可行走區加上很小的角色：若網格解析度只看角色半徑，節點數會爆炸。
+  // 這裡確認搜尋會自動放粗步長，在合理時間內結束並回傳安全結果。
+  const area = openArea({ right: 4000, bottom: 3000 });
+  const self = character({ x: 10, baseY: 2990, width: 6, height: 10, targetX: 3900, targetY: 100 });
+
+  const started = process.hrtime.bigint();
+  const result = steerCharacter(self, [self], area, 0.1);
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+  assert.equal(isSafe(result, [], area), true);
+  assert.ok(elapsedMs < 250, `復位搜尋耗時 ${elapsedMs.toFixed(1)}ms，超出可接受範圍`);
+});
+
 test('blocked 只標記真正無安全點的結果，下一次安全更新會清除 stale marker', () => {
   const self = character();
   const fullyBlocked = openArea({
