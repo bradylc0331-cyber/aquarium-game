@@ -99,8 +99,25 @@ test('getWalkableArea 按畫面比例正規化，且上緣落在草地而不是�
   assert.equal(big.left, 64);
   assert.equal(big.right, 1536);
 
-  // 四個障礙：河流兩塊 + 前景兩棵大橄欖樹的樹幹
-  assert.equal(big.obstacles.length, 4);
+  // 兩個障礙：前景左右兩棵大橄欖樹的樹幹。
+  //
+  // **草地上沒有河**——河在畫面中段的遠景，角色走的前景草地上沒有水。
+  // 先前這裡有兩塊「河流」障礙，是照整張插畫的印象加的，沒有對著角色實際
+  // 走的那條草地量：它們擋掉一大片能走的草地，還夾出一條 28px 高的死巷，
+  // 有角色走進去之後連續 294 秒出不來。
+  assert.equal(big.obstacles.length, 2);
+
+  // 障礙的位置也要釘住，不能只釘數量——只驗數量的話，把兩塊縮成 0x0
+  // 或搬到別的地方測試都不會發現。
+  const [leftTrunk, rightTrunk] = big.obstacles;
+  assert.ok(Math.abs(leftTrunk.x / 1600 - 0.05) < 1e-9, '左樹幹的左緣');
+  assert.ok(Math.abs(leftTrunk.width / 1600 - 0.11) < 1e-9, '左樹幹的寬度');
+  assert.ok(Math.abs(rightTrunk.x / 1600 - 0.88) < 1e-9, '右樹幹的左緣');
+  assert.ok(Math.abs(rightTrunk.width / 1600 - 0.10) < 1e-9, '右樹幹的寬度');
+  for (const trunk of big.obstacles) {
+    assert.ok(trunk.height > 0 && trunk.width > 0, '樹幹要有實際大小');
+    assert.ok(trunk.y < big.bottom && trunk.y + trunk.height > big.top, '樹幹要跟草地帶重疊');
+  }
 
   // 完全按畫面比例縮放
   assert.equal(small.top / 450, big.top / 900);
@@ -943,53 +960,41 @@ test('沒有「夠遠」的可達點時，退而求其次取最遠的**可達**�
   assert.notEqual(target.targetX, 950, '不得回傳口袋外那個到不了的原目標');
 });
 
-test('過得了河：唯一通道是下緣窄走廊時，角色要繞得過去而不是在河邊耗著', () => {
-  // 可行走區被河流切成左右兩半，唯一的通道是下緣一條窄走廊——1920x1080 下
-  // 河流下緣 y=907、可行走下緣 y=1004，扣掉上下各一個 radiusY=31.8，
-  // 實際只有 33px 高。要走過去，角色得先朝著**遠離目標**的方向往下走一大段。
+test('繞得過中間有缺口的長牆——只靠貪婪避讓永遠找不到那個缺口', () => {
+  // 用**合成**的場地，不是正式的可行走區。
   //
-  // 只靠本地避讓的貪婪控制器永遠不會這樣選：實測拿掉繞路規劃之後，同一位角色
-  // 180 秒都過不了河；有規劃則 92 秒走到。這條測試就是釘住那個差別。
-  const area = getWalkableArea(1920, 1080);
-  const size = displaySize({ width: 220, height: 400 }, 1920, 1080, 1.05);
+  // 正式場地拿掉那兩塊不該存在的河流障礙之後，剩下的兩棵樹幹是從草地帶上緣
+  // 貫穿到下緣的，角色根本不會需要繞過它們——換句話說，正式場地已經退化成
+  // 一個沒有內部障礙的矩形。但繞路規劃這個能力還是要有測試守著：背景圖會換，
+  // 障礙也會跟著改。所以這裡自己造一道有缺口的長牆。
+  const area = openArea({
+    right: 1400, bottom: 900,
+    obstacles: [
+      // 一道幾乎貫穿的牆，缺口開在最下面
+      { x: 640, y: 0, width: 120, height: 700 },
+    ],
+  });
+  const size = { width: 90, height: 180 };
   const space = personalSpace({ x: 0, baseY: 0, ...size });
-
-  // 前提：起點與目標分別在河的兩側，而且中間真的被擋住。
   let self = {
-    id: 'crosser', x: 1580, baseY: 900, ...size,
-    // 用**真實**的巡航速度，不是先前那個 55——產品裡最慢的天使只有 11px/s，
-    // 用三倍速跑這條測試，等於在測一個產品不會進入的區間。
-    targetX: 406, targetY: 895, cruiseSpeed: 16, vx: 0, vy: 0,
+    id: 'detour', x: 300, baseY: 300, ...size,
+    targetX: 1100, targetY: 300, cruiseSpeed: 16, vx: 0, vy: 0,
   };
-  assert.equal(isSafe(self, [], area), true, '前提：起點要是安全的');
+  assert.equal(isSafe(self, [], area), true, '前提：起點安全');
   assert.equal(
     isSafe({ ...self, x: self.targetX, baseY: self.targetY }, [], area), true,
-    '前提：目標要是安全的',
+    '前提：目標安全',
   );
-  // 前提：直線過不去。沿著兩點連線取樣，必須有一段被河擋住——
-  // 否則角色直接走直線就到了，測不到繞路。
-  const blockedSamples = [];
-  for (let t = 0; t <= 1; t += 0.01) {
-    const probe = {
-      ...self,
-      x: self.x + (self.targetX - self.x) * t,
-      baseY: self.baseY + (self.targetY - self.baseY) * t,
-    };
-    if (!isSafe(probe, [], area)) blockedSamples.push(t);
-  }
-  assert.ok(
-    blockedSamples.length > 0,
-    '前提：兩點的直線連線必須被河擋住，否則直線就過去了，測不到繞路',
-  );
+  // 前提：直線過不去，一定得往下繞到缺口
+  assert.equal(pathReaches(self, area, { targetX: self.targetX, targetY: self.targetY }), false,
+    '前提：直線必須被牆擋住');
 
   const dt = 1 / 60;
-  const startX = self.x;
-  const startY = self.baseY;
   let arrivedAt = -1;
-  let lowestPoint = self.baseY;
-  for (let frame = 0; frame < 60 * 150; frame++) {
+  let lowest = self.baseY;
+  for (let frame = 0; frame < 60 * 240; frame++) {
     self = { ...self, ...steerCharacter(self, [self], area, dt) };
-    lowestPoint = Math.max(lowestPoint, self.baseY);
+    lowest = Math.max(lowest, self.baseY);
     assert.equal(isSafe(self, [], area), true, `第 ${frame} 幀走到不合法的位置`);
     if (Math.hypot(self.targetX - self.x, self.targetY - self.baseY) < 20) {
       arrivedAt = frame / 60;
@@ -997,28 +1002,11 @@ test('過得了河：唯一通道是下緣窄走廊時，角色要繞得過去�
     }
   }
 
-  assert.ok(arrivedAt >= 0, `150 秒內沒有過河（最後停在 ${self.x.toFixed(0)}, ${self.baseY.toFixed(0)}）`);
-  // 走廊在下緣，所以路上一定得下到那個高度才過得去。
-  // （原本這裡是 `assert.ok(space.radiusY > 0)`——恆真，什麼都沒驗到。）
-  // 走廊上緣要由**擋住直線的那些障礙**決定（河流），不是場上所有障礙——
-  // 兩棵前景橄欖樹延伸得更低，把它們算進來會得到一條角色根本不必去的高度。
-  const blockers = area.obstacles.filter((o) => {
-    for (let t = 0; t <= 1; t += 0.01) {
-      // 用**出發點**算，不是迴圈跑完之後的 self——那時角色早就在對岸了，
-      // 直線當然是通的，篩出來會是空的。
-      const px = startX + (self.targetX - startX) * t;
-      const py = startY + (self.targetY - startY) * t;
-      if (hitsObstacle(personalSpace({ ...size, x: px, baseY: py }), o)) return true;
-    }
-    return false;
-  });
-  assert.ok(blockers.length > 0, '前提：要找得到擋住直線的障礙');
-  const corridorTop = Math.max(...blockers.map((o) => o.y + o.height)) + space.radiusY;
-  assert.ok(
-    lowestPoint >= corridorTop,
-    `路上必須下到下緣走廊（走廊上緣 ${corridorTop.toFixed(0)}，`
-      + `實際最低只到 ${lowestPoint.toFixed(0)}）`,
-  );
+  assert.ok(arrivedAt >= 0,
+    `240 秒內沒有繞過去（最後停在 ${self.x.toFixed(0)}, ${self.baseY.toFixed(0)}）`);
+  // 缺口在牆的下方，所以路上一定得下到那個高度
+  assert.ok(lowest > 700 - space.radiusY,
+    `路上必須下到缺口的高度（缺口上緣 700，實際最低只到 ${lowest.toFixed(0)}）`);
 });
 
 test('steerCharacter 將位置限制在邊界，沒有安全前進路徑時保持安全靜止', () => {

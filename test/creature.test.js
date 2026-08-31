@@ -224,7 +224,19 @@ test('setMovement 要把移動層的整包狀態帶回角色，否則繞行認�
   // 寫在回傳值上的狀態必須經由 setMovement 回到實例上。這裡不逐一列舉欄位——
   // 那樣以後新增欄位一樣會漏。改成比對兩條軌跡：一條走 Creature.setMovement，
   // 一條走純物件展開（測試裡慣用的傳遞方式）。兩者必須完全一致。
-  const area = Movement.getWalkableArea(1600, 900);
+  // 正式的可行走區拿掉那兩塊不該存在的河流障礙之後，就是一個沒有內部障礙的
+  // 矩形，走直線不會觸發閃避——而不觸發閃避的話，這個測試比對的兩條軌跡
+  // 本來就會一樣，等於什麼都沒驗。所以自己放一塊障礙在路中間。
+  const base = Movement.getWalkableArea(1600, 900);
+  const area = {
+    ...base,
+    obstacles: [{
+      x: (base.left + base.right) / 2 - 60,
+      y: base.top,
+      width: 120,
+      height: (base.bottom - base.top) * 0.6,
+    }],
+  };
   const creature = makeCreature({ spawn: { x: area.left + 60, baseY: area.bottom - 40 } });
   creature.targetX = area.right - 60;
   creature.targetY = area.top + 40;
