@@ -3,8 +3,8 @@
 (function (root) {
   const KEY = 'jeju-aquarium-game:calibration';
 
-  function saveCalibration({ H, invH, corners, cameraLabel }) {
-    const record = { H, invH, corners, cameraLabel: cameraLabel || null, savedAt: Date.now() };
+  function saveCalibration({ H, invH, corners, cameraLabel, layout }) {
+    const record = { H, invH, corners, cameraLabel: cameraLabel || null, layout: layout || null, savedAt: Date.now() };
     localStorage.setItem(KEY, JSON.stringify(record));
     return record;
   }

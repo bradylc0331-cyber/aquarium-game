@@ -37,14 +37,18 @@
   select, input[type=range] { width: 100%; }
   .row { display: flex; align-items: center; gap: 8px; }
   .log { max-height: 160px; overflow-y: auto; font-size: 13px; color: #46587a; }
+  .auto-panel { margin-top: 10px; padding: 12px; border: 2px solid #f0c979; border-radius: 12px; background: #fff9e9; }
+  .auto-toggle { display: flex; align-items: center; gap: 9px; margin: 0; color: #6b4b16; font-size: 15px; font-weight: 700; }
+  .auto-toggle input { width: 20px; height: 20px; margin: 0; }
+  .auto-note { margin: 6px 0 0; color: #755d34; font-size: 13px; }
 </style>
 </head>
 <body>
-<h1>🎨 塗鴉水族館・掃描控制台</h1>
+<h1>🎨 塗鴉聖經樂園・掃描控制台</h1>
 <div class="grid">
 
   <div class="card">
-    <h2>① 選生物種類</h2>
+    <h2>① QR 自動辨識人物（按鈕為手動備援）</h2>
     <div class="species-grid" id="speciesGrid"></div>
 
     <h2 style="margin-top:16px">② 攝影機</h2>
@@ -54,11 +58,11 @@
     </div>
     <video id="video" autoplay playsinline muted></video>
 
-    <h2 style="margin-top:16px">③ 校正（活動開始前做一次就好）</h2>
+    <h2 style="margin-top:16px">③ A4 四角自動對位（校正按鈕為備援）</h2>
     <label>偵測門檻（畫面太暗/太亮偵測不到角標時調整） <span id="thresholdVal">90</span></label>
     <input type="range" id="thresholdSlider" min="40" max="180" value="90" />
     <div class="row">
-      <button id="calibrateBtn">校正</button>
+      <button id="calibrateBtn">手動重新對位</button>
       <button id="clearCalibrationBtn" class="secondary">清除校正</button>
     </div>
     <div id="calibrationStatus" class="status">尚未校正</div>
@@ -66,22 +70,27 @@
 
   <div class="card">
     <h2>④ 即時對位預覽</h2>
-    <p style="font-size:13px;color:#46587a;margin:0 0 8px">校正完成後，把塗色紙放進校正墊中間的虛線框，對齊淡淡的生物外框輪廓再按掃描。</p>
-    <canvas id="correctedCanvas" class="preview" width="800" height="600"></canvas>
+    <p style="font-size:13px;color:#46587a;margin:0 0 8px">把完整 A4 塗色紙放入鏡頭，四個黑色方塊與 QR Code 都不要遮住；系統會自動拉正、辨識人物並拍攝。</p>
+    <canvas id="correctedCanvas" class="preview" width="800" height="566"></canvas>
+    <div class="auto-panel">
+      <label class="auto-toggle"><input type="checkbox" id="autoModeToggle" /> 啟用自動拍攝與延遲登場</label>
+      <p class="auto-note">作品穩定約 1 秒會自動拍攝；拍完後隨機等待 30–60 秒，自動出現在聖經樂園。拿走作品後才會偵測下一張。</p>
+      <div id="autoStatus" class="status warn">自動模式尚未開啟</div>
+    </div>
     <div class="row" style="margin-top:10px">
-      <button id="scanBtn" disabled>📸 掃描</button>
+      <button id="scanBtn" disabled>📸 手動掃描（備援）</button>
     </div>
     <div id="scanStatus" class="status">先完成校正</div>
 
     <h2 style="margin-top:16px">掃描結果預覽</h2>
     <canvas id="resultCanvas" class="preview" style="max-height:220px;object-fit:contain;background:#0d1b33"></canvas>
     <div class="row">
-      <button id="sendBtn" class="secondary" disabled>✅ 送到水族箱</button>
+      <button id="sendBtn" class="secondary" disabled>✅ 送到聖經樂園</button>
       <button id="rescanBtn" class="secondary" disabled>🔁 重新掃描</button>
     </div>
 
-    <h2 style="margin-top:16px">最近送出</h2>
-    <div id="log" class="log">（還沒有生物送出）</div>
+    <h2 style="margin-top:16px">等待登場與最近送出</h2>
+    <div id="log" class="log">（還沒有人物送出）</div>
   </div>
 
 </div>
@@ -90,24 +99,51 @@
 <script src="src/homography.js"></script>
 <script src="src/markerDetect.js"></script>
 <script src="src/species.js"></script>
+<script src="src/qrCode.js"></script>
 <script src="src/svgRaster.js"></script>
 <script src="src/extract.js"></script>
 <script src="src/channel.js"></script>
 <script src="src/calibrationStore.js"></script>
+<script src="src/autoCapture.js"></script>
 <script>
 (function () {
-  const { CANVAS_W, CANVAS_H, MARKER_CANONICAL } = AquariumConstants;
+  const { CANVAS_W, CANVAS_H, WORK_AREA, MARKER_CANONICAL, QR_AREA } = AquariumConstants;
   const channel = AquariumChannel.createChannel();
 
   let selectedSpeciesId = Species.SPECIES[0].id;
   let mediaStream = null;
-  let calibration = CalibrationStore.loadCalibration();
-  const maskCache = new Map();   // speciesId -> canonical mask ImageData (800x600)
+  const storedCalibration = CalibrationStore.loadCalibration();
+  let calibration = storedCalibration && storedCalibration.layout === 'a4-qr-v1' ? storedCalibration : null;
+  const maskCache = new Map();   // speciesId -> A4 canonical mask ImageData
   const outlineCache = new Map(); // speciesId -> HTMLCanvasElement（半透明外框，疊在即時預覽上）
-  let lastScanResult = null; // { croppedCanvas }
+  const imageCache = new Map();
+  let lastScanResult = null; // { dataURL, speciesId }
+  const autoDetector = new AutoCapture.StableArtworkDetector();
+  let autoCaptureBusy = false;
+  let previewUpdating = false;
+  let pendingAutoCount = 0;
+  let lastAutoAlignAt = 0;
+  let qrCandidateId = null;
+  let qrCandidateHits = 0;
+  let qrMisses = 0;
+  let recognizedSpeciesId = null;
+  const qrEntries = Species.SPECIES.map((sp) => ({ id: sp.id, text: `BIBLE:${sp.id.toUpperCase()}` }));
 
-  // ---------- 生物選單 ----------
+  // ---------- 人物選單 ----------
   const speciesGrid = document.getElementById('speciesGrid');
+  function selectSpecies(speciesId, source) {
+    const species = Species.getSpecies(speciesId);
+    if (!species) return;
+    const changed = selectedSpeciesId !== speciesId;
+    selectedSpeciesId = speciesId;
+    if (changed) renderSpeciesGrid();
+    if (source === 'manual') {
+      recognizedSpeciesId = null;
+      qrCandidateId = null;
+      qrCandidateHits = 0;
+      if (autoDetector.state === 'ready') resetAutoDetection(`已手動選擇${species.name}，請放入對應塗色紙`);
+    }
+  }
   function renderSpeciesGrid() {
     speciesGrid.innerHTML = '';
     for (const sp of Species.SPECIES) {
@@ -115,17 +151,41 @@
       btn.type = 'button';
       btn.className = 'species-btn' + (sp.id === selectedSpeciesId ? ' selected' : '');
       btn.innerHTML = `<span class="emoji">${sp.emoji}</span>${sp.name}`;
-      btn.onclick = () => { selectedSpeciesId = sp.id; renderSpeciesGrid(); };
+      btn.onclick = () => selectSpecies(sp.id, 'manual');
       speciesGrid.appendChild(btn);
     }
   }
   renderSpeciesGrid();
 
   // ---------- 遮罩 / 外框快取 ----------
+  function loadImage(src) {
+    if (imageCache.has(src)) return imageCache.get(src);
+    const promise = new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('讀取人物線稿失敗：' + src));
+      image.src = src;
+    });
+    imageCache.set(src, promise);
+    return promise;
+  }
+
   async function getCanonicalMask(species) {
     if (maskCache.has(species.id)) return maskCache.get(species.id);
-    const svg = SvgRaster.canonicalMaskSVG(species);
-    const canvas = await SvgRaster.rasterizeSVGToCanvas(svg, CANVAS_W, CANVAS_H);
+    let canvas;
+    if (species.mask) {
+      const image = await loadImage(species.mask);
+      canvas = document.createElement('canvas');
+      canvas.width = CANVAS_W;
+      canvas.height = CANVAS_H;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+      ctx.drawImage(image, WORK_AREA.x0, WORK_AREA.y0, WORK_AREA.x1 - WORK_AREA.x0, WORK_AREA.y1 - WORK_AREA.y0);
+    } else {
+      const svg = SvgRaster.canonicalMaskSVG(species);
+      canvas = await SvgRaster.rasterizeSVGToCanvas(svg, CANVAS_W, CANVAS_H);
+    }
     const data = canvas.getContext('2d').getImageData(0, 0, CANVAS_W, CANVAS_H);
     maskCache.set(species.id, data);
     return data;
@@ -133,8 +193,28 @@
 
   async function getOutlineOverlayCanvas(species) {
     if (outlineCache.has(species.id)) return outlineCache.get(species.id);
-    const svg = SvgRaster.canonicalOutlineSVG(species);
-    const canvas = await SvgRaster.rasterizeSVGToCanvas(svg, CANVAS_W, CANVAS_H);
+    let canvas;
+    if (species.art) {
+      const image = await loadImage(species.art);
+      canvas = document.createElement('canvas');
+      canvas.width = CANVAS_W;
+      canvas.height = CANVAS_H;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(image, WORK_AREA.x0, WORK_AREA.y0, WORK_AREA.x1 - WORK_AREA.x0, WORK_AREA.y1 - WORK_AREA.y0);
+      const data = ctx.getImageData(0, 0, CANVAS_W, CANVAS_H);
+      for (let i = 0; i < data.data.length; i += 4) {
+        const luma = (data.data[i] * 0.299) + (data.data[i + 1] * 0.587) + (data.data[i + 2] * 0.114);
+        const darkness = 255 - luma;
+        data.data[i] = 15;
+        data.data[i + 1] = 31;
+        data.data[i + 2] = 55;
+        data.data[i + 3] = darkness < 18 ? 0 : Math.min(255, (darkness - 10) * 3);
+      }
+      ctx.putImageData(data, 0, 0);
+    } else {
+      const svg = SvgRaster.canonicalOutlineSVG(species);
+      canvas = await SvgRaster.rasterizeSVGToCanvas(svg, CANVAS_W, CANVAS_H);
+    }
     outlineCache.set(species.id, canvas);
     return canvas;
   }
@@ -157,7 +237,12 @@
 
   async function startCamera(deviceId) {
     if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
-    const constraints = { video: deviceId ? { deviceId: { exact: deviceId } } : true, audio: false };
+    const videoConstraints = {
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+      ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+    };
+    const constraints = { video: videoConstraints, audio: false };
     mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = mediaStream;
     await refreshCameraList();
@@ -170,12 +255,41 @@
   };
   cameraSelect.onchange = () => startCamera(cameraSelect.value);
 
-  function captureVideoFrame() {
-    const w = video.videoWidth, h = video.videoHeight;
+  function captureVideoFrame(maxWidth) {
+    const sourceW = video.videoWidth, sourceH = video.videoHeight;
+    const scale = maxWidth && sourceW > maxWidth ? maxWidth / sourceW : 1;
+    const w = Math.round(sourceW * scale), h = Math.round(sourceH * scale);
     const c = document.createElement('canvas');
     c.width = w; c.height = h;
     c.getContext('2d').drawImage(video, 0, 0, w, h);
     return c.getContext('2d').getImageData(0, 0, w, h);
+  }
+
+  function detectCurrentSheetCorners() {
+    const detectionFrame = captureVideoFrame(640);
+    const threshold = Number(thresholdSlider.value);
+    const corners = MarkerDetect.detectCorners(detectionFrame, { threshold, windowFrac: 0.46 });
+    if (!corners) return null;
+    const sx = video.videoWidth / detectionFrame.width;
+    const sy = video.videoHeight / detectionFrame.height;
+    const scaled = {};
+    for (const [key, [x, y]] of Object.entries(corners)) scaled[key] = [x * sx, y * sy];
+    return scaled;
+  }
+
+  function calibrationFromCorners(corners, persist) {
+    const src = [corners.tl, corners.tr, corners.br, corners.bl];
+    const dst = [MARKER_CANONICAL.tl, MARKER_CANONICAL.tr, MARKER_CANONICAL.br, MARKER_CANONICAL.bl];
+    const H = Homography.computeHomography(src, dst);
+    const invH = Homography.invertHomography(H);
+    const record = {
+      H, invH, corners,
+      cameraLabel: cameraSelect.selectedOptions[0] && cameraSelect.selectedOptions[0].textContent,
+      layout: 'a4-qr-v1',
+      savedAt: Date.now(),
+    };
+    calibration = persist ? CalibrationStore.saveCalibration(record) : record;
+    return calibration;
   }
 
   // ---------- 校正 ----------
@@ -186,6 +300,8 @@
   const calibrationStatusEl = document.getElementById('calibrationStatus');
   const scanBtn = document.getElementById('scanBtn');
   const scanStatusEl = document.getElementById('scanStatus');
+  const autoModeToggle = document.getElementById('autoModeToggle');
+  const autoStatusEl = document.getElementById('autoStatus');
 
   function setCalibrationStatus(kind, text) {
     calibrationStatusEl.className = 'status ' + kind;
@@ -195,39 +311,53 @@
     scanStatusEl.className = 'status ' + kind;
     scanStatusEl.textContent = text;
   }
+  function setAutoStatus(kind, text) {
+    autoStatusEl.className = 'status ' + kind;
+    autoStatusEl.textContent = text;
+  }
+  function pendingSuffix() {
+    return pendingAutoCount ? `・目前 ${pendingAutoCount} 個作品等待登場` : '';
+  }
+  function resetAutoDetection(message) {
+    autoDetector.reset();
+    if (!autoModeToggle.checked) setAutoStatus('warn', '自動模式尚未開啟');
+    else if (!calibration) setAutoStatus('warn', '請先完成校正');
+    else setAutoStatus('ok', `${message || '請放入塗色紙'}${pendingSuffix()}`);
+  }
 
   function refreshCalibrationUI() {
     if (calibration) {
       const t = new Date(calibration.savedAt).toLocaleTimeString('zh-TW');
-      setCalibrationStatus('ok', `已於 ${t} 校正完成，可以開始掃描`);
+      setCalibrationStatus('ok', `已於 ${t} 找到 A4 四角，可自動拉正與辨識 QR`);
       scanBtn.disabled = false;
-      setScanStatus('ok', '準備好了，把塗色紙放進框內後按掃描');
+      setScanStatus('ok', autoModeToggle.checked ? '自動模式待機中，也可使用手動掃描備援' : '準備好了，把塗色紙放進框內後按手動掃描');
+      resetAutoDetection('自動模式已待機，請放入塗色紙');
     } else {
-      setCalibrationStatus('warn', '尚未校正：把校正墊放進畫面、四個角落的黑色方塊都要拍得到，再按「校正」');
+      setCalibrationStatus('warn', '尚未找到 A4：請放入完整塗色紙，讓四個黑色方塊都進入鏡頭');
       scanBtn.disabled = true;
       setScanStatus('warn', '先完成校正才能掃描');
+      setAutoStatus('warn', '請先完成校正');
     }
   }
   refreshCalibrationUI();
 
+  autoModeToggle.onchange = () => {
+    resetAutoDetection(autoModeToggle.checked ? '自動模式已開啟，請放入塗色紙' : undefined);
+    if (calibration) setScanStatus('ok', autoModeToggle.checked ? '自動模式待機中，也可使用手動掃描備援' : '自動模式已關閉，可使用手動掃描');
+  };
+
   document.getElementById('calibrateBtn').onclick = () => {
     if (!video.videoWidth) { setCalibrationStatus('err', '請先開啟攝影機'); return; }
-    const frame = captureVideoFrame();
-    const threshold = Number(thresholdSlider.value);
-    const corners = MarkerDetect.detectCorners(frame, { threshold });
+    const corners = detectCurrentSheetCorners();
     if (!corners) {
-      setCalibrationStatus('err', '四個角落沒有同時偵測到黑色方塊。確認校正墊四角都在畫面內、光線充足，或調整偵測門檻再試一次。');
+      setCalibrationStatus('err', '找不到 A4 的四個定位方塊。請讓整張紙完整入鏡、手離開紙面，或調整偵測門檻。');
       return;
     }
-    const src = [corners.tl, corners.tr, corners.br, corners.bl];
-    const dst = [MARKER_CANONICAL.tl, MARKER_CANONICAL.tr, MARKER_CANONICAL.br, MARKER_CANONICAL.bl];
     try {
-      const H = Homography.computeHomography(src, dst);
-      const invH = Homography.invertHomography(H);
-      calibration = CalibrationStore.saveCalibration({ H, invH, corners, cameraLabel: cameraSelect.selectedOptions[0] && cameraSelect.selectedOptions[0].textContent });
+      calibrationFromCorners(corners, true);
       refreshCalibrationUI();
     } catch (e) {
-      setCalibrationStatus('err', '校正失敗：四個角點可能太靠近一直線，調整校正墊角度再試一次。');
+      setCalibrationStatus('err', 'A4 對位失敗：請把紙張攤平並完整放入鏡頭。');
     }
   };
 
@@ -240,84 +370,206 @@
   // ---------- 即時對位預覽 ----------
   const correctedCanvas = document.getElementById('correctedCanvas');
   const correctedCtx = correctedCanvas.getContext('2d');
-
-  async function updateCorrectedPreview() {
-    if (!video.videoWidth || !calibration) return;
-    const frame = captureVideoFrame();
-    const warped = Homography.warpPerspectiveImageData(frame, calibration.invH, CANVAS_W, CANVAS_H);
-    correctedCtx.putImageData(warped, 0, 0);
-    const species = Species.getSpecies(selectedSpeciesId);
-    if (species) {
-      const overlay = await getOutlineOverlayCanvas(species);
-      correctedCtx.save();
-      correctedCtx.globalAlpha = 0.55;
-      correctedCtx.drawImage(overlay, 0, 0);
-      correctedCtx.restore();
-    }
-  }
-  setInterval(() => { updateCorrectedPreview().catch(() => {}); }, 140);
-
-  // ---------- 掃描 ----------
   const resultCanvas = document.getElementById('resultCanvas');
   const sendBtn = document.getElementById('sendBtn');
   const rescanBtn = document.getElementById('rescanBtn');
+  const logEl = document.getElementById('log');
+  const activityLog = [];
 
-  scanBtn.onclick = async () => {
-    if (!calibration) return;
-    const species = Species.getSpecies(selectedSpeciesId);
-    const frame = captureVideoFrame();
-    const warped = Homography.warpPerspectiveImageData(frame, calibration.invH, CANVAS_W, CANVAS_H);
+  function addLog(text) {
+    activityLog.unshift(text);
+    logEl.innerHTML = activityLog.slice(0, 24).map((line) => `<div>${line}</div>`).join('');
+  }
+
+  function clearScanResult() {
+    lastScanResult = null;
+    sendBtn.disabled = true;
+    rescanBtn.disabled = true;
+    resultCanvas.getContext('2d').clearRect(0, 0, resultCanvas.width, resultCanvas.height);
+  }
+
+  async function scanWarpedFrame(warped, species, automatic) {
     const mask = await getCanonicalMask(species);
     const merged = Extract.applyMaskToImageData(warped, mask);
     const box = Extract.boundingBoxOfAlpha(merged, 24);
-    if (!box) {
-      setScanStatus('err', '框內沒有掃到顏色，確認塗色紙有放進虛線框內，再按一次掃描。');
-      return;
-    }
+    if (!box) return null;
     const cropped = Extract.cropImageData(merged, box, 6);
 
     const maxDim = 420;
     const scale = Math.min(1, maxDim / Math.max(cropped.width, cropped.height));
-    const outW = Math.round(cropped.width * scale), outH = Math.round(cropped.height * scale);
+    const outW = Math.round(cropped.width * scale);
+    const outH = Math.round(cropped.height * scale);
     const srcCanvas = document.createElement('canvas');
-    srcCanvas.width = cropped.width; srcCanvas.height = cropped.height;
+    srcCanvas.width = cropped.width;
+    srcCanvas.height = cropped.height;
     srcCanvas.getContext('2d').putImageData(new ImageData(cropped.data, cropped.width, cropped.height), 0, 0);
 
-    resultCanvas.width = outW; resultCanvas.height = outH;
+    resultCanvas.width = outW;
+    resultCanvas.height = outH;
     const rctx = resultCanvas.getContext('2d');
     rctx.clearRect(0, 0, outW, outH);
     rctx.drawImage(srcCanvas, 0, 0, outW, outH);
 
-    lastScanResult = { canvas: resultCanvas, speciesId: species.id };
-    sendBtn.disabled = false;
-    rescanBtn.disabled = false;
-    setScanStatus('ok', `掃到了！確認顏色沒問題就按「送到水族箱」，不滿意就重新掃描。`);
+    lastScanResult = { dataURL: resultCanvas.toDataURL('image/png'), speciesId: species.id };
+    sendBtn.disabled = automatic;
+    rescanBtn.disabled = automatic;
+    return lastScanResult;
+  }
+
+  function sendToScene(species, dataURL, source) {
+    channel.send({ type: 'creature-scanned', speciesId: species.id, textureDataURL: dataURL, ts: Date.now() });
+    addLog(`${new Date().toLocaleTimeString('zh-TW')} — ${source === 'auto' ? '自動登場' : '手動送出'} ${species.emoji} ${species.name}`);
+  }
+
+  function queueAutomaticSubmission(species, dataURL) {
+    const delayMs = AutoCapture.randomDelayMs(30, 60);
+    const delaySeconds = Math.round(delayMs / 1000);
+    pendingAutoCount++;
+    addLog(`${new Date().toLocaleTimeString('zh-TW')} — 等待 ${delaySeconds} 秒 ${species.emoji} ${species.name}`);
+    setAutoStatus('ok', `已自動拍攝${species.name}，請拿走作品；約 ${delaySeconds} 秒後登場${pendingSuffix()}`);
+    setTimeout(() => {
+      pendingAutoCount--;
+      sendToScene(species, dataURL, 'auto');
+      if (autoModeToggle.checked && calibration) {
+        const next = autoDetector.state === 'waiting-removal' ? '請拿走已拍攝的作品' : '請放入下一張塗色紙';
+        setAutoStatus('ok', `${species.name}已登場・${next}${pendingSuffix()}`);
+      }
+    }, delayMs);
+  }
+
+  async function captureAutomatically(warped, species) {
+    autoCaptureBusy = true;
+    try {
+      const result = await scanWarpedFrame(warped, species, true);
+      if (!result) {
+        setAutoStatus('err', '自動拍攝失敗，請拿走作品後重新放入，或改用手動掃描');
+        return;
+      }
+      queueAutomaticSubmission(species, result.dataURL);
+      setScanStatus('ok', `已自動拍攝${species.name}並排入等待，請拿走作品`);
+    } catch (error) {
+      setAutoStatus('err', '自動拍攝失敗：' + error.message);
+    } finally {
+      autoCaptureBusy = false;
+    }
+  }
+
+  function recognizeSpeciesQr(warped) {
+    const result = BibleQrCode.identify(warped, QR_AREA, qrEntries);
+    if (!result) {
+      qrMisses++;
+      qrCandidateId = null;
+      qrCandidateHits = 0;
+      if (qrMisses >= 8 && autoDetector.state === 'ready') recognizedSpeciesId = null;
+      return recognizedSpeciesId ? Species.getSpecies(recognizedSpeciesId) : null;
+    }
+    qrMisses = 0;
+    if (qrCandidateId === result.id) qrCandidateHits++;
+    else {
+      qrCandidateId = result.id;
+      qrCandidateHits = 1;
+    }
+    if (qrCandidateHits >= 2) {
+      recognizedSpeciesId = result.id;
+      selectSpecies(result.id, 'qr');
+    }
+    return recognizedSpeciesId ? Species.getSpecies(recognizedSpeciesId) : null;
+  }
+
+  function tryAutomaticSheetAlignment(now) {
+    if (now - lastAutoAlignAt < 650) return;
+    lastAutoAlignAt = now;
+    const corners = detectCurrentSheetCorners();
+    if (!corners) return;
+    const firstAlignment = !calibration;
+    calibrationFromCorners(corners, false);
+    setCalibrationStatus('ok', '已自動找到 A4 四角，畫面會跟著每張紙重新拉正');
+    scanBtn.disabled = false;
+    if (firstAlignment) {
+      setScanStatus('ok', autoModeToggle.checked ? 'A4 已對位，正在辨識 QR Code' : 'A4 已對位，可手動掃描');
+      resetAutoDetection('A4 已對位，正在辨識 QR Code');
+    }
+  }
+
+  async function updateCorrectedPreview() {
+    if (previewUpdating || !video.videoWidth) return;
+    previewUpdating = true;
+    try {
+      tryAutomaticSheetAlignment(performance.now());
+      if (!calibration) return;
+      const frame = captureVideoFrame();
+      const warped = Homography.warpPerspectiveImageData(frame, calibration.invH, CANVAS_W, CANVAS_H);
+      correctedCtx.putImageData(warped, 0, 0);
+      const qrSpecies = recognizeSpeciesQr(warped);
+      const species = qrSpecies || Species.getSpecies(selectedSpeciesId);
+      if (!species) return;
+
+      if (qrSpecies || !autoModeToggle.checked || autoDetector.state === 'waiting-removal') {
+        const overlay = await getOutlineOverlayCanvas(species);
+        correctedCtx.save();
+        correctedCtx.globalAlpha = 0.55;
+        correctedCtx.drawImage(overlay, 0, 0);
+        correctedCtx.restore();
+      }
+
+      if (autoModeToggle.checked && !autoCaptureBusy) {
+        if (autoDetector.state === 'ready' && !qrSpecies) {
+          setAutoStatus('warn', `已找到 A4，正在讀取上方 QR Code；請勿遮住 QR${pendingSuffix()}`);
+          return;
+        }
+        const mask = await getCanonicalMask(species);
+        const ratio = AutoCapture.measureInkRatio(warped, mask);
+        const signal = autoDetector.update(ratio);
+        if (signal === 'capture') {
+          await captureAutomatically(warped, species);
+        } else if (signal === 'removed') {
+          recognizedSpeciesId = null;
+          qrCandidateId = null;
+          qrCandidateHits = 0;
+          setAutoStatus('ok', `已準備好，請放入下一張 A4 塗色紙${pendingSuffix()}`);
+        } else if (autoDetector.state === 'waiting-removal') {
+          setAutoStatus('ok', `已拍攝，請把作品拿走${pendingSuffix()}`);
+        } else if (ratio >= autoDetector.presentThreshold) {
+          setAutoStatus('warn', `偵測到${species.name}作品，請保持不動…${pendingSuffix()}`);
+        } else {
+          setAutoStatus('ok', `QR 已辨識：${species.emoji} ${species.name}・等待作品穩定${pendingSuffix()}`);
+        }
+      }
+    } finally {
+      previewUpdating = false;
+    }
+  }
+  setInterval(() => { updateCorrectedPreview().catch(() => {}); }, 140);
+
+  // ---------- 手動掃描備援 ----------
+  scanBtn.onclick = async () => {
+    if (!calibration || !video.videoWidth) return;
+    const species = Species.getSpecies(selectedSpeciesId);
+    const frame = captureVideoFrame();
+    const warped = Homography.warpPerspectiveImageData(frame, calibration.invH, CANVAS_W, CANVAS_H);
+    const result = await scanWarpedFrame(warped, species, false);
+    if (!result) {
+      setScanStatus('err', '框內沒有掃到顏色，確認塗色紙有放進虛線框內，再按一次掃描。');
+      return;
+    }
+    if (autoModeToggle.checked) {
+      autoDetector.markCaptured();
+      setAutoStatus('ok', `已使用手動備援拍攝${species.name}，請拿走作品${pendingSuffix()}`);
+    }
+    setScanStatus('ok', `掃到了！確認顏色沒問題就按「送到聖經樂園」，不滿意就重新掃描。`);
   };
 
   rescanBtn.onclick = () => {
-    lastScanResult = null;
-    sendBtn.disabled = true;
-    rescanBtn.disabled = true;
-    resultCanvas.getContext('2d').clearRect(0, 0, resultCanvas.width, resultCanvas.height);
-    setScanStatus('ok', '準備好了，把塗色紙放進框內後按掃描');
+    clearScanResult();
+    setScanStatus('ok', '準備好了，把塗色紙放進框內後按手動掃描');
   };
 
-  const logEl = document.getElementById('log');
-  const sentLog = [];
   sendBtn.onclick = () => {
     if (!lastScanResult) return;
     const species = Species.getSpecies(lastScanResult.speciesId);
-    const dataURL = lastScanResult.canvas.toDataURL('image/png');
-    channel.send({ type: 'creature-scanned', speciesId: species.id, textureDataURL: dataURL, ts: Date.now() });
-
-    sentLog.unshift(`${new Date().toLocaleTimeString('zh-TW')} — ${species.emoji} ${species.name}`);
-    logEl.innerHTML = sentLog.slice(0, 20).map((l) => `<div>${l}</div>`).join('');
-
-    lastScanResult = null;
-    sendBtn.disabled = true;
-    rescanBtn.disabled = true;
-    resultCanvas.getContext('2d').clearRect(0, 0, resultCanvas.width, resultCanvas.height);
-    setScanStatus('ok', '已送到水族箱！下一位小朋友可以放紙進去了');
+    sendToScene(species, lastScanResult.dataURL, 'manual');
+    clearScanResult();
+    setScanStatus('ok', '已送到聖經樂園！下一位小朋友可以放紙進去了');
   };
 
   // 一開始就試著列出裝置名稱（如果之前已授權過攝影機權限，名稱會直接顯示）

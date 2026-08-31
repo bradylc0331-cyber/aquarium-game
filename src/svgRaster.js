@@ -51,7 +51,7 @@
       `<rect width="100%" height="100%" fill="#000000"/>${bodyMarkup(species, 'mask')}</svg>`;
   }
 
-  // 完整 800x600 校正後畫布座標系裡的遮罩：黑底 + 白色生物形狀，擺在 WORK_AREA 內
+  // 完整 A4 校正後畫布座標系裡的遮罩：黑底 + 白色人物形狀，擺在 WORK_AREA 內
   function canonicalMaskSVG(species) {
     const { CANVAS_W, CANVAS_H } = AquariumConstants;
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${CANVAS_W}" height="${CANVAS_H}" viewBox="0 0 ${CANVAS_W} ${CANVAS_H}">` +
@@ -60,7 +60,7 @@
       `</svg>`;
   }
 
-  // 完整 800x600 校正後畫布座標系裡的線稿預覽（控制台上給工作人員核對用）
+  // 完整 A4 校正後畫布座標系裡的線稿預覽（控制台上給工作人員核對用）
   function canonicalOutlineSVG(species) {
     const { CANVAS_W, CANVAS_H } = AquariumConstants;
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${CANVAS_W}" height="${CANVAS_H}" viewBox="0 0 ${CANVAS_W} ${CANVAS_H}">` +

@@ -1,68 +1,82 @@
-# 塗鴉水族館 Jeju Aquarium Game
+# 塗鴉聖經樂園 Bible Wonderland Game
 
-濟州島水族館那套「小朋友塗色 → 掃描 → 投影進虛擬水族箱」互動裝置的簡化復刻版，
-設計給教會兒童主日的活動用：純瀏覽器網頁、零建置、零外部依賴，一台筆電 + 一台
-接了電視的畫面 + 一台平台式攝影機（文件掃描機）就能跑。
+給教會兒童活動使用的互動網站：小朋友替完整身體的聖經人物線稿塗色，攝影機偵測作品穩定後自動拍攝，並在 30–60 秒後讓作品出現在投影中的聖經樂園。整套系統是純瀏覽器網頁、零建置、零後端依賴；一台筆電、一台投影電視和一台向下拍攝的攝影機即可運作。
 
 ## 這是怎麼運作的
 
-跟濟州島現場那套一樣，拆成四段：
+1. **A4 QR 塗色紙**：從 `templates/print.html` 印出七位人物的完整 A4 橫式寫實黑白線稿。每張紙包含專屬 QR Code 與四個定位方塊，不用裁剪。
+2. **自動對位與辨識**：攝影機逐張偵測 A4 四角、拉正透視，再從 QR 自動判斷是哪位人物；人物按鈕與手動重新對位仍保留作為備援。
+3. **自動拍攝**：控制台會辨識對應人物遮罩內的線稿或色彩；作品穩定約一秒便自動拍攝、去背和裁切。同一張作品只拍一次，拿走後才會偵測下一張。
+4. **延遲登場**：拍攝完成後隨機等待 30–60 秒，再自動傳到聖經樂園；手動掃描與送出按鈕仍保留作為現場備援。
+5. **聖經樂園**：另一個分頁常駐投影暖色聖經時代風景，收到新人物後讓左右腿交替自然踏步（天使飄浮），並疊加薄雲、陽光、流水與風吹草動。
 
-1. **塗色紙**：小朋友拿到印好的海洋生物線稿（`templates/print.html` 印），塗上顏色。
-2. **校正墊**：貼在攝影平台上、不會動的一張紙，四個角有黑色方塊。校正一次之後，
-   系統就知道「攝影機看到的歪斜畫面」要怎麼攤平回一個標準矩形。
-3. **掃描**：把塗好的紙放進校正墊中間的框，按下「掃描」，網頁會：
-   - 把攝影機畫面用校正好的透視變換（homography）攤平
-   - 用選定生物的線稿形狀當「遮罩」，只留下線稿範圍內的顏色，其他地方去背透明
-   - 把摳出來的顏色貼圖送到水族箱畫面
-4. **水族箱**：另一個視窗/分頁（投影到電視），常駐跑一個會動的虛擬水族箱場景，
-   收到新生物就讓牠游進去，跟其他生物一起悠遊。
+系統不需要 AI 即時辨識自由塗鴉。穩定度來自「固定線稿模板 + 定位標記透視校正」；活動現場不會呼叫任何外部 API。
 
-沒有用到任何「AI 辨識自由塗鴉」這種難題——跟真正的商業裝置一樣，靠的是**固定
-線稿模板 + 定位標記的透視校正**取巧做到，好處是穩定、可預期，現場也很適合直接
-講給小朋友聽「電腦怎麼知道紙放在哪裡、怎麼把顏色貼上去」。
+## 內建人物
+
+| id | 人物 | 動作風格 |
+|---|---|---|
+| `noah` | 挪亞 | 穩重緩行 |
+| `moses` | 摩西 | 穩重緩行 |
+| `david` | 大衛 | 較有活力的移動 |
+| `daniel` | 但以理 | 穩重緩行 |
+| `jonah` | 約拿 | 緩慢踏步 |
+| `shepherd` | 牧羊人 | 穩重緩行 |
+| `angel` | 天使 | 輕柔飄浮 |
+
+人物資料集中在 `src/species.js`，每位人物包含正式線稿 `art`、掃描遮罩 `mask`、動作參數與簡化備援形狀。列印、即時對位與掃描都引用同一組素材；正式圖片讀取失敗時仍可退回幾何線稿，不會讓活動流程中斷。
 
 ## 檔案地圖
 
 | 檔案 | 用途 |
 |---|---|
-| `index.html` | 首頁，連到下面三個頁面 |
-| `display.html` | 水族箱畫面——投影到電視，全程開著 |
-| `control.html` | 掃描控制台——接攝影機的筆電開這頁 |
-| `templates/print.html` | 列印校正墊與各生物塗色紙 |
-| `src/constants.js` | 校正墊版面、畫布尺寸等共用常數，唯一資料來源 |
-| `src/species.js` | 每種生物的形狀資料（線稿＋泳動參數） |
-| `src/svgRaster.js` | 同一份形狀資料同時產生「列印線稿」跟「內部遮罩」 |
-| `src/homography.js` | 3x3 透視變換：求解、反矩陣、套用、warp 整張影像 |
-| `src/markerDetect.js` | 在畫面四個角落找黑色方塊、算重心，供校正用 |
-| `src/extract.js` | 用遮罩從攝影機畫面摳出生物顏色，去背、裁切 |
-| `src/creature.js` | 生物游動的行為（速度、擺動、旋轉）與畫到 canvas |
-| `src/scene.js` | 水族箱背景：漸層海水、光束、氣泡、珊瑚、海草 |
-| `src/channel.js` | `control.html` 跟 `display.html` 之間傳生物資料用的 `BroadcastChannel` 包裝 |
-| `src/calibrationStore.js` | 校正矩陣存在 `localStorage`，重開瀏覽器也不用重校正 |
+| `index.html` | 首頁，連到投影、控制台與列印頁 |
+| `display.html` | 聖經樂園投影畫面 |
+| `control.html` | 攝影機、A4 自動對位、QR 辨識、掃描與送出控制台 |
+| `templates/print.html` | 列印七張完整 A4 QR 人物塗色紙 |
+| `assets/backgrounds/bible-world.png` | GPT Image 生成的聖經時代場景背景 |
+| `assets/characters/*.png` | GPT Image 生成的七位寫實黑白塗色線稿 |
+| `assets/masks/*.png` | 由線稿封閉輪廓產生的 400x300 掃描遮罩 |
+| `src/species.js` | 人物形狀、名稱與動作參數 |
+| `src/svgRaster.js` | 從同一份形狀資料產生列印線稿和掃描遮罩 |
+| `src/homography.js` | 3x3 透視變換、反矩陣與影像攤平 |
+| `src/markerDetect.js` | 偵測每張 A4 的四角黑色定位標記 |
+| `src/qrCode.js` | 離線產生與辨識七組人物 QR Code |
+| `src/extract.js` | 依遮罩去背、裁切塗色內容 |
+| `src/creature.js` | 人物移動與 canvas 繪製；保留通用動作系統 |
+| `src/scene.js` | 背景圖 cover 縮放、薄雲、暖金光束、河面波光與前景草葉 |
+| `src/channel.js` | 控制台和投影分頁之間的 `BroadcastChannel` 包裝 |
+| `src/calibrationStore.js` | 將校正矩陣存入 `localStorage` |
+| `src/autoCapture.js` | 作品出現／移除判斷、穩定防重複拍攝與 30–60 秒延遲 |
+| `scripts/generate-character-masks.py` | 更換人物線稿後重新產生對齊遮罩 |
 
-## 為什麼校正只需要做一次
+## 背景美術
 
-`control.html` 跟 `display.html` 是**同一個瀏覽器裡的兩個分頁/視窗**，不需要
-後端伺服器；靠瀏覽器內建的 `BroadcastChannel` 跨分頁傳資料。校正結果（一個 3x3
-矩陣）存在 `localStorage`，只要攝影機跟平台沒有被移動，整個活動期間只需要在
-一開始校正一次。
+專案已包含 `assets/backgrounds/bible-world.png`。它是一張完整的 16:9 靜態場景，程式只在上面疊加動態特效；活動當天不需要圖片生成服務或 API 金鑰。
 
-校正墊跟每張生物塗色紙用**同一個 mm/px 比例尺**列印（見 `PRINT_MM_PER_PX`），
-所以生物塗色紙的外框物理尺寸剛好等於校正墊上那個虛線引導框——只要邊對邊放進去，
-掃描出來的顏色就會準確對應到線稿的位置，不需要每次掃描都重新辨識紙的邊緣。
+若要重新生成背景，可在 ChatGPT 的圖片生成功能貼上以下提示，挑選成品後覆蓋同一路徑。請保留「無人物、無文字」限制，以免和小朋友掃描進來的人物競爭視覺焦點。
+
+```text
+A warm, gentle children's storybook illustration of a peaceful biblical-era
+landscape at golden hour. Rolling green hills, olive trees, a few sheep grazing,
+a winding river, a small distant hillside town with flat-roofed stone houses,
+soft warm sunlight rays coming through gentle clouds, and a calm blue sky.
+Soft watercolor and gouache painting style, warm and inviting, wide 16:9
+landscape composition with a calm uncluttered foreground, no people, no text,
+no watermark, suitable for a children's church event background.
+```
+
+`src/scene.js` 使用 cover 規則等比例鋪滿畫面。圖片仍在載入或讀取失敗時，會先顯示暖色漸層，因此不會出現空白畫面。若另做 API 產圖工具，金鑰只能由 `OPENAI_API_KEY` 環境變數讀取，不能放在 HTML、前端 JavaScript 或版本庫中；可用尺寸與模型名稱請以 [OpenAI Image API 官方文件](https://platform.openai.com/docs/guides/image-generation) 為準。
 
 ## 本機測試
 
 ```bash
-npm test        # node --test test/*.test.js，測 homography / 角標偵測 / 去背裁切等純邏輯
-npm run serve   # python3 -m http.server 8933，然後瀏覽器開 http://localhost:8933
+npm test
+npm run serve
 ```
 
-`test/` 底下只測「不需要真的攝影機、真的 canvas」的部分（矩陣數學、連通元件搜尋、
-像素合成）。牽涉攝影機權限跟即時畫面的部分要在瀏覽器裡手動走一次，見
-[`SETUP.md`](SETUP.md)。
+啟動後開啟 `http://localhost:8933`。Node 測試涵蓋 A4 比例、QR 圖樣與辨識、透視數學、角標偵測、遮罩裁切、人物動作與場景繪製；攝影機權限、跨分頁傳送及實際列印比例仍需依 [`SETUP.md`](SETUP.md) 做瀏覽器煙霧測試。
 
-## 活動現場架設
+## 現場架設
 
 見 [`SETUP.md`](SETUP.md)。

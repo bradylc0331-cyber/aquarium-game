@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>虛擬水族箱</title>
+<title>聖經樂園</title>
 <style>
-  html, body { margin: 0; padding: 0; background: #04184f; overflow: hidden; height: 100%; }
+  html, body { margin: 0; padding: 0; background: #d9ae68; overflow: hidden; height: 100%; }
   canvas { display: block; }
   #hint {
     position: fixed; left: 16px; bottom: 12px; color: rgba(255,255,255,0.55);
@@ -14,7 +14,7 @@
   }
   #toast {
     position: fixed; top: 24px; left: 50%; transform: translateX(-50%) translateY(-20px);
-    background: rgba(255,255,255,0.92); color: #0d3b8c; padding: 10px 22px; border-radius: 999px;
+    background: rgba(255,252,242,0.94); color: #775128; padding: 10px 22px; border-radius: 999px;
     font: bold 20px/1 -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif;
     opacity: 0; transition: opacity .3s, transform .3s; pointer-events: none;
   }
@@ -48,13 +48,27 @@
 
   const bubbles = AquariumScene.createBubbles(canvas.width, canvas.height, 40);
   const creatures = [];
-  const MAX_CREATURES = 40; // 活動跑一整個下午，超過上限就淘汰最舊的，避免無限長
+  const MAX_CREATURES = 40; // 活動跑一整個下午，超過上限就淘汰最舊的人物，避免無限長
 
-  // 開場先游幾隻預設配色的示範生物，畫面才不會一片空——真的掃描結果進來時一樣加進同一個陣列
+  // 開場先放入幾位暖色調的示範人物，真的掃描結果進來時一樣加進同一個陣列。
   const DEMO_COLORS = {
-    clownfish: [255, 140, 60], turtle: [90, 170, 110], jellyfish: [230, 190, 230],
-    dolphin: [120, 160, 210], octopus: [200, 110, 170], starfish: [250, 190, 90],
+    noah: [184, 118, 82], moses: [194, 151, 92], david: [185, 96, 72],
+    daniel: [154, 116, 77], jonah: [105, 137, 123], shepherd: [202, 169, 111],
+    angel: [232, 211, 158],
   };
+  const imageCache = new Map();
+
+  function loadImage(src) {
+    if (imageCache.has(src)) return imageCache.get(src);
+    const promise = new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('讀取人物素材失敗：' + src));
+      image.src = src;
+    });
+    imageCache.set(src, promise);
+    return promise;
+  }
 
   function textureFromImageData(imageData) {
     const c = document.createElement('canvas');
@@ -64,12 +78,37 @@
   }
 
   async function makeDemoTexture(species) {
-    const maskSvg = SvgRaster.nativeMaskSVG(species);
     const [, , vw, vh] = species.viewBox.split(' ').map(Number);
-    const maskCanvas = await SvgRaster.rasterizeSVGToCanvas(maskSvg, vw, vh);
+    let maskCanvas;
+    if (species.mask) {
+      const image = await loadImage(species.mask);
+      maskCanvas = document.createElement('canvas');
+      maskCanvas.width = vw;
+      maskCanvas.height = vh;
+      maskCanvas.getContext('2d').drawImage(image, 0, 0, vw, vh);
+    } else {
+      const maskSvg = SvgRaster.nativeMaskSVG(species);
+      maskCanvas = await SvgRaster.rasterizeSVGToCanvas(maskSvg, vw, vh);
+    }
     const maskData = maskCanvas.getContext('2d').getImageData(0, 0, vw, vh);
     const color = Extract.solidColorImageData(vw, vh, DEMO_COLORS[species.id] || [200, 200, 200]);
     const merged = Extract.applyMaskToImageData(color, maskData);
+    if (species.art) {
+      const artImage = await loadImage(species.art);
+      const artCanvas = document.createElement('canvas');
+      artCanvas.width = vw;
+      artCanvas.height = vh;
+      artCanvas.getContext('2d').drawImage(artImage, 0, 0, vw, vh);
+      const art = artCanvas.getContext('2d').getImageData(0, 0, vw, vh).data;
+      for (let i = 0; i < merged.data.length; i += 4) {
+        const luma = (art[i] * 0.299) + (art[i + 1] * 0.587) + (art[i + 2] * 0.114);
+        if (luma < 205 && merged.data[i + 3] > 0) {
+          merged.data[i] = 42;
+          merged.data[i + 1] = 34;
+          merged.data[i + 2] = 28;
+        }
+      }
+    }
     const box = Extract.boundingBoxOfAlpha(merged, 20);
     if (!box) return null;
     const cropped = Extract.cropImageData(merged, box, 4);
@@ -105,7 +144,7 @@
     img.onload = () => {
       spawnCreature(msg.speciesId, img);
       const species = Species.getSpecies(msg.speciesId);
-      showToast(`${(species && species.emoji) || '🐟'} 新的${(species && species.name) || '生物'}游進來了！`);
+      showToast(`${(species && species.emoji) || '📖'} ${(species && species.name) || '聖經人物'}來到聖經樂園了！`);
     };
     img.src = msg.textureDataURL;
   });
@@ -120,14 +159,14 @@
     AquariumScene.updateBubbles(bubbles, dt, canvas.width, canvas.height);
 
     AquariumScene.drawBackground(ctx, canvas.width, canvas.height, elapsed);
-    AquariumScene.drawRocksAndCoral(ctx, canvas.width, canvas.height);
-    AquariumScene.drawSeaweed(ctx, canvas.width, canvas.height, elapsed);
     AquariumScene.drawBubbles(ctx, bubbles);
 
     for (const c of creatures) {
       c.update(dt, elapsed);
       c.draw(ctx, elapsed);
     }
+
+    AquariumScene.drawForeground(ctx, canvas.width, canvas.height, elapsed);
 
     requestAnimationFrame(frame);
   }

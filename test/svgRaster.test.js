@@ -4,22 +4,22 @@ const { canonicalMaskSVG, canonicalOutlineSVG, placementTransform } = require('.
 const { getSpecies } = require('../src/species.js');
 const { CANVAS_W, CANVAS_H, WORK_AREA } = require('../src/constants.js');
 
-test('placementTransform 用 1.5 倍縮放把 400x300 的生物擺進 WORK_AREA（4:3 同比例不變形）', () => {
+test('placementTransform 用 1.5 倍縮放把 400x300 的人物擺進 WORK_AREA（4:3 同比例不變形）', () => {
   const scale = (WORK_AREA.x1 - WORK_AREA.x0) / 400;
-  assert.equal(scale, (WORK_AREA.y1 - WORK_AREA.y0) / 300, 'x/y 縮放比例要一樣，不然生物會被壓扁或拉長');
+  assert.equal(scale, (WORK_AREA.y1 - WORK_AREA.y0) / 300, 'x/y 縮放比例要一樣，不然人物會被壓扁或拉長');
   const t = placementTransform();
   assert.match(t, new RegExp(`scale\\(${scale}\\)`));
 });
 
-test('canonicalMaskSVG 尺寸是完整畫布，背景黑、生物白', () => {
-  const fish = getSpecies('clownfish');
-  const svg = canonicalMaskSVG(fish);
+test('canonicalMaskSVG 尺寸是完整畫布，背景黑、人物白', () => {
+  const noah = getSpecies('noah');
+  const svg = canonicalMaskSVG(noah);
   assert.match(svg, new RegExp(`width="${CANVAS_W}" height="${CANVAS_H}"`));
   assert.match(svg, /fill="#000000"/);
   assert.match(svg, /fill="#ffffff"|stroke="#ffffff"/);
 });
 
-test('每一種生物的遮罩跟線稿都要能產生、形狀數量一致', () => {
+test('每一位人物的遮罩跟線稿都要能產生、形狀數量一致', () => {
   const { SPECIES } = require('../src/species.js');
   for (const species of SPECIES) {
     const mask = canonicalMaskSVG(species);

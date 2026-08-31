@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>列印：校正墊與生物塗色紙</title>
+<title>列印：A4 QR 聖經人物塗色紙</title>
 <style>
   body { margin: 0; font: 15px/1.6 -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; color: #14213d; background: #eef4fb; }
   .toolbar { padding: 16px; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.06); position: sticky; top: 0; z-index: 10; }
@@ -11,15 +11,16 @@
   .toolbar p { margin: 8px 0 0; font-size: 13px; color: #46587a; }
   .sheet {
     background: #fff; margin: 24px auto; box-shadow: 0 2px 12px rgba(0,0,0,0.1);
-    padding: 18mm; width: 210mm; box-sizing: border-box; page-break-after: always;
+    padding: 0; width: 297mm; height: 210mm; box-sizing: border-box; page-break-after: always;
   }
-  .sheet h2 { margin: 0 0 4mm; font-size: 16px; }
-  .sheet p.note { font-size: 12px; color: #46587a; margin: 2mm 0 6mm; }
-  .sheet svg { display: block; border: 1px solid #ccc; }
+  .sheet .screen-caption { padding: 8px 12px; background: #eef4fb; font-weight: 700; }
+  .sheet svg { display: block; width: 297mm; height: 210mm; border: 1px solid #ccc; box-sizing: border-box; }
   @media print {
+    @page { size: A4 landscape; margin: 0; }
     .toolbar { display: none; }
     body { background: #fff; }
     .sheet { box-shadow: none; margin: 0; }
+    .sheet .screen-caption { display: none; }
     .sheet svg { border: none; }
   }
 </style>
@@ -27,60 +28,59 @@
 <body>
 <div class="toolbar">
   <button onclick="window.print()">🖨️ 列印全部</button>
-  <p>用瀏覽器列印時，請把「縮放」設為 100% / 「實際大小」（不要用「符合頁面」），這樣校正墊跟生物塗色紙的實際尺寸才會對得起來。第一頁「校正墊」只需要印一張、貼在攝影平台上固定不動；後面每種生物可以視需要多印幾張給小朋友輪流著色。</p>
+  <p>每頁都是一張完整 A4 橫式人物塗色紙。列印請選「A4、橫向、100%／實際大小」，不要選「符合頁面」。四角黑色方塊和上方 QR Code 都要完整印出，作品完成後整張直接放到攝影機下，不用裁剪。</p>
 </div>
 
 <script src="../src/constants.js"></script>
 <script src="../src/species.js"></script>
+<script src="../src/qrCode.js"></script>
 <script>
 (function () {
-  const { CANVAS_W, CANVAS_H, WORK_AREA, MARKER_CANONICAL, MARKER_SIZE, PRINT_MM_PER_PX } = AquariumConstants;
+  const { CANVAS_W, CANVAS_H, WORK_AREA, MARKER_CANONICAL, MARKER_SIZE, QR_AREA, PRINT_MM_PER_PX } = AquariumConstants;
   const root = document.currentScript.parentElement;
-
-  function placematSVG() {
-    const wmm = (CANVAS_W * PRINT_MM_PER_PX).toFixed(1);
-    const hmm = (CANVAS_H * PRINT_MM_PER_PX).toFixed(1);
-    const half = MARKER_SIZE / 2;
-    const squares = Object.values(MARKER_CANONICAL).map(([x, y]) =>
-      `<rect x="${x - half}" y="${y - half}" width="${MARKER_SIZE}" height="${MARKER_SIZE}" fill="#000"/>`
-    ).join('');
-    const { x0, y0, x1, y1 } = WORK_AREA;
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${wmm}mm" height="${hmm}mm" viewBox="0 0 ${CANVAS_W} ${CANVAS_H}">
-      <rect width="100%" height="100%" fill="#ffffff"/>
-      ${squares}
-      <rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}" fill="none" stroke="#2f6fed" stroke-width="3" stroke-dasharray="14 10"/>
-      <text x="${(x0 + x1) / 2}" y="${y0 - 18}" font-size="20" fill="#2f6fed" text-anchor="middle" font-family="sans-serif">把小朋友的塗色紙放在這個框框裡</text>
-      <text x="${CANVAS_W / 2}" y="${CANVAS_H - 14}" font-size="15" fill="#888" text-anchor="middle" font-family="sans-serif">校正墊——印一張固定貼在攝影平台上，四個黑色方塊不要被遮住</text>
-    </svg>`;
-  }
 
   function speciesPrintSVG(species) {
     const { x0, y0, x1, y1 } = WORK_AREA;
     const w = x1 - x0, h = y1 - y0;
-    const wmm = (w * PRINT_MM_PER_PX).toFixed(1);
-    const hmm = (h * PRINT_MM_PER_PX).toFixed(1);
+    const wmm = (CANVAS_W * PRINT_MM_PER_PX).toFixed(1);
+    const hmm = (CANVAS_H * PRINT_MM_PER_PX).toFixed(1);
     const scale = w / 400;
+    const half = MARKER_SIZE / 2;
+    const squares = Object.values(MARKER_CANONICAL).map(([x, y]) =>
+      `<rect x="${x - half}" y="${y - half}" width="${MARKER_SIZE}" height="${MARKER_SIZE}" rx="1.5" fill="#000"/>`
+    ).join('');
     const shapesMarkup = species.shapes.map((s) => {
       const attrs = Object.entries(s.attrs).map(([k, v]) => `${k}="${v}"`).join(' ');
       const strokeW = s.type === 'line' ? (s.lineWidth || 16) : 6;
       return `<${s.tag} ${attrs} fill="none" stroke="#111" stroke-width="${strokeW}" stroke-linecap="round" stroke-linejoin="round"/>`;
     }).join('');
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${wmm}mm" height="${hmm}mm" viewBox="${x0} ${y0} ${w} ${h}">
-      <rect x="${x0 + 2}" y="${y0 + 2}" width="${w - 4}" height="${h - 4}" fill="#fff" stroke="#bbb" stroke-width="2" stroke-dasharray="10 8"/>
-      <g transform="translate(${x0} ${y0}) scale(${scale})">${shapesMarkup}</g>
+    const artwork = species.art
+      ? `<image href="../${species.art}" x="${x0}" y="${y0}" width="${w}" height="${h}" preserveAspectRatio="xMidYMid meet"/>`
+      : `<g transform="translate(${x0} ${y0}) scale(${scale})">${shapesMarkup}</g>`;
+    const qrText = `BIBLE:${species.id.toUpperCase()}`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${wmm}mm" height="${hmm}mm" viewBox="0 0 ${CANVAS_W} ${CANVAS_H}">
+      <rect width="100%" height="100%" fill="#fff"/>
+      <text x="72" y="48" font-size="26" font-weight="700" fill="#222" font-family="sans-serif">${species.emoji} ${species.name}・聖經人物塗色紙</text>
+      <text x="480" y="35" font-size="13" fill="#555" font-family="sans-serif">QR 自動辨識區</text>
+      <text x="480" y="55" font-size="13" fill="#a23b2a" font-family="sans-serif">請勿塗畫或遮住四角方塊</text>
+      ${BibleQrCode.svgMarkup(qrText, QR_AREA.x, QR_AREA.y, QR_AREA.size)}
+      <rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="#fff"/>
+      ${artwork}
+      <rect x="${x0}" y="${y0}" width="${w}" height="${h}" fill="none" stroke="#ddd" stroke-width="1.5"/>
+      ${squares}
+      <text x="${CANVAS_W / 2}" y="559" font-size="12" fill="#777" text-anchor="middle" font-family="sans-serif">整張 A4 直接放到攝影機下方，不用裁剪・四個黑色方塊需完整入鏡</text>
     </svg>`;
   }
 
-  function addSheet(title, note, svgString) {
+  function addSheet(title, svgString) {
     const div = document.createElement('div');
     div.className = 'sheet';
-    div.innerHTML = `<h2>${title}</h2><p class="note">${note}</p>${svgString}`;
+    div.innerHTML = `<div class="screen-caption">${title}</div>${svgString}`;
     root.appendChild(div);
   }
 
-  addSheet('校正墊 Calibration Placemat', '只印一張，貼在攝影平台固定的位置，之後不要移動。', placematSVG());
   for (const species of Species.SPECIES) {
-    addSheet(`${species.emoji} ${species.name}塗色紙`, '虛線是跟校正墊對齊用的外框，剪下時盡量留著這條邊，方便小朋友放紙時對準。', speciesPrintSVG(species));
+    addSheet(`${species.emoji} ${species.name}・A4 QR 自動辨識塗色紙`, speciesPrintSVG(species));
   }
 })();
 </script>
