@@ -175,7 +175,9 @@
     return {
       // 撒得開一點。全部擠在同一小段草地上會疊成一坨白影，反而比不畫還糟。
       x: w * (0.08 + random() * 0.80),
-      baseY: h * (0.62 + random() * 0.24),
+      // 只放在較近的前景帶：放遠了會小到看不出腿和頭，變成畫面上的幾顆白蛋，
+      // 背景插畫裡本來就畫了一群遠處的羊，那一段交給美術就好。
+      baseY: h * (0.74 + random() * 0.14),
       direction: random() < 0.5 ? -1 : 1,
       speed: 8 + random() * 8,
       mode: random() < 0.5 ? 'walking' : 'grazing',
@@ -210,7 +212,7 @@
   // 那幾隻畫好的羊——尺寸寫死的話在不同解析度下會忽大忽小，也會跟背景格格不入。
   function sheepScale(sheep, h) {
     const depth = Math.max(0, Math.min(1, (sheep.baseY - h * 0.45) / (h * 0.46)));
-    return (h / 900) * (0.55 + depth * 0.5);
+    return (h / 900) * (0.72 + depth * 0.62);
   }
 
   function drawSheep(ctx, sheep, t, canvasHeight) {
@@ -233,27 +235,43 @@
     ctx.fill();
     ctx.restore();
 
-    ctx.strokeStyle = '#7d6446';
-    ctx.lineWidth = 2.5;
-    for (const legX of [-14, 10]) {
+    // 腿：要夠深夠粗才看得出來是羊而不是一顆白蛋
+    ctx.strokeStyle = '#6b5335';
+    ctx.lineWidth = 3.5;
+    ctx.lineCap = 'round';
+    for (const legX of [-15, -7, 8, 15]) {
       ctx.beginPath();
-      ctx.moveTo(legX, -9);
+      ctx.moveTo(legX, -10);
       ctx.lineTo(legX + (sheep.mode === 'walking' ? Math.sin(t * 5 + legX) * 3 : 0), 0);
       ctx.stroke();
     }
 
-    // 羊毛：取背景插畫的暖白，不是純白，才不會在夕陽色調裡跳出來
+    // 羊毛：取背景插畫的暖白，不是純白，才不會在夕陽色調裡跳出來。
+    // 輪廓要有足夠對比，否則在亮草地上整隻糊掉。
     ctx.fillStyle = '#f4ecd8';
-    ctx.strokeStyle = 'rgba(125, 100, 70, 0.55)';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(107, 83, 53, 0.85)';
+    ctx.lineWidth = 2.2;
     ctx.beginPath();
     ctx.ellipse(0, -22, 28, 18, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = '#8a7052';
+    // 背上一點暖陰影，讓羊毛看起來有體積而不是一片白
+    ctx.save();
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = '#c8ac82';
+    ctx.beginPath();
+    ctx.ellipse(-4, -15, 20, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // 頭與耳朵
+    ctx.fillStyle = '#7d6446';
     ctx.beginPath();
     ctx.ellipse(27, -25 + headDrop, 10, 12, 0.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(20, -33 + headDrop * 0.7, 6, 3.5, -0.5, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }

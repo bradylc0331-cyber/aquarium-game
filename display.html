@@ -30,7 +30,9 @@
 <script src="src/species.js"></script>
 <script src="src/svgRaster.js"></script>
 <script src="src/extract.js"></script>
+<script src="src/movement.js"></script>
 <script src="src/creature.js"></script>
+<script src="src/characterManager.js"></script>
 <script src="src/scene.js"></script>
 <script src="src/artworkMessage.js"></script>
 <script src="src/channel.js"></script>
@@ -48,9 +50,33 @@
   resize();
 
   const bubbles = AquariumScene.createBubbles(canvas.width, canvas.height, 40);
-  const flock = Array.from({ length: 4 }, () => AquariumScene.createSheep(canvas.width, canvas.height));
-  const creatures = [];
-  const MAX_CREATURES = 40; // 活動跑一整個下午，超過上限就淘汰最舊的人物，避免無限長
+  const flock = Array.from({ length: 3 }, () => AquariumScene.createSheep(canvas.width, canvas.height));
+  // 可行走區在每一幀重算（視窗會被縮放），角色移動與羊的避讓共用同一份。
+  let walkable = Movement.getWalkableArea(canvas.width, canvas.height);
+
+  // 規格：畫面最多同時 15 位；第 16 位進場時第 1 位先淡出，依 FIFO 循環。
+  // 掃描失敗或找不到安全入口的作品留在 pending，不占名額也不淘汰場上角色。
+  const manager = new CharacterManagerModule.CharacterManager({
+    maxCharacters: 15,
+    exitSeconds: 0.4,
+    createCharacter(work) {
+      const species = Species.getSpecies(work.speciesId);
+      if (!species || !work.image) return null;
+      const size = CreatureModule.displaySize(work.image, canvas.width, canvas.height, 1);
+      const spawn = Movement.findSafeSpawn(size, manager.renderable, walkable);
+      if (!spawn) return null; // 沒有安全入口就留在 pending 等空間，不縮小也不重疊
+      return new CreatureModule.Creature({
+        artworkId: work.artworkId,
+        image: work.image,
+        species,
+        canvasWidth: canvas.width,
+        canvasHeight: canvas.height,
+        spawn,
+        isDemo: work.isDemo === true,
+      });
+    },
+  });
+  const creatures = manager.renderable;
 
   // 開場先放入幾位暖色調的示範人物，真的掃描結果進來時一樣加進同一個陣列。
   const DEMO_COLORS = {
@@ -117,17 +143,18 @@
     return textureFromImageData(cropped);
   }
 
-  function spawnCreature(speciesId, image) {
-    const species = Species.getSpecies(speciesId);
-    if (!species || !image) return;
-    if (creatures.length >= MAX_CREATURES) creatures.shift();
-    creatures.push(new CreatureModule.Creature({ image, species, canvasWidth: canvas.width, canvasHeight: canvas.height }));
-  }
-
+  // 示範人物走同一個 manager，才會一起算進 15 位的 FIFO 名額。
   async function seedDemoCreatures() {
     for (const species of Species.SPECIES) {
-      const tex = await makeDemoTexture(species);
-      if (tex) spawnCreature(species.id, tex);
+      const image = await makeDemoTexture(species);
+      if (!image) continue;
+      manager.enqueue({
+        artworkId: `demo-${species.id}`,
+        speciesId: species.id,
+        image,
+        ts: 0,
+        isDemo: true,
+      });
     }
   }
   seedDemoCreatures();
@@ -141,13 +168,22 @@
 
   const channel = AquariumChannel.createChannel();
   channel.onMessage((msg) => {
-    if (!msg || msg.type !== 'creature-scanned') return;
+    // 先驗證訊息本身，再去載圖——壞掉的訊息不該占用名額，也不該淘汰場上角色。
+    if (!ArtworkMessage.isScannedArtworkMessage(msg)) return;
+
     const img = new Image();
     img.onload = () => {
-      spawnCreature(msg.speciesId, img);
+      const result = manager.enqueue({
+        artworkId: msg.artworkId,
+        speciesId: msg.speciesId,
+        image: img,
+        ts: msg.ts,
+      });
+      if (result === 'duplicate') return;
       const species = Species.getSpecies(msg.speciesId);
       showToast(`${(species && species.emoji) || '📖'} ${(species && species.name) || '聖經人物'}來到聖經樂園了！`);
     };
+    img.onerror = () => { /* 圖載不起來就當這次掃描沒發生，不占名額 */ };
     img.src = msg.textureDataURL;
   });
 
@@ -157,6 +193,30 @@
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
     elapsed += dt;
+
+    walkable = Movement.getWalkableArea(canvas.width, canvas.height);
+    manager.update(dt);
+
+    for (const character of creatures) {
+      // 到了目標就換一個新目標，形成持續的自由漫遊
+      const reached = Math.hypot(character.targetX - character.x, character.targetY - character.baseY) < 12;
+      if (reached) {
+        const target = Movement.chooseSafeTarget(character, creatures, walkable);
+        character.targetX = target.targetX;
+        character.targetY = target.targetY;
+      }
+      // 已經卡住的角色不必每一幀都重跑完整搜尋——那是最貴的路徑，
+      // 多位角色同時卡住會疊加成掉幀。隔一段時間再試一次就夠了。
+      if (character.blocked) {
+        character.blockedRetry = (character.blockedRetry || 0) - dt;
+        if (character.blockedRetry > 0) continue;
+        character.blockedRetry = 0.5;
+      }
+      const next = Movement.steerCharacter(character, creatures, walkable, dt);
+      character.setMovement(next);
+      character.blocked = next.blocked;
+      character.drivenByMovement = true;
+    }
 
     AquariumScene.updateBubbles(bubbles, dt, canvas.width, canvas.height);
     for (const sheep of flock) {
