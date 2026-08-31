@@ -123,17 +123,6 @@
   }
 
   // 手勢只回傳「肢體角度」，永遠不回傳腳底位移——手勢不該把角色抬離地面。
-  function gesturePose(kind, elapsed) {
-    if (kind === 'raise-hands') {
-      return { leftArmAngle: -0.55, rightArmAngle: 0.55, footYOffset: 0 };
-    }
-    if (kind === 'wave') {
-      const wave = Math.sin(elapsed * Math.PI * 6);
-      return { leftArmAngle: 0, rightArmAngle: -0.45 + wave * 0.18, footYOffset: 0 };
-    }
-    return { leftArmAngle: 0, rightArmAngle: 0, footYOffset: 0 };
-  }
-
   // 畫布高度相對於設計解析度（1080p）的比例。角色尺寸與移動速度共用這個比例，
   // 換解析度時整個場景的視覺節奏才會一致。
   const DESIGN_CANVAS_HEIGHT = 1080;
@@ -144,11 +133,6 @@
 
   function randRange([min, max]) {
     return min + Math.random() * (max - min);
-  }
-
-  function drawImagePart(ctx, image, sx, sy, sw, sh, dx, dy, dw, dh) {
-    if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
-    ctx.drawImage(image, sx, sy, sw, sh, dx, dy, dw, dh);
   }
 
   class Creature {
@@ -209,9 +193,6 @@
       this.stateElapsed = 0;
       this.opacity = 0;
       // 每位新角色先打一次招呼，之後才進入低頻率的偶發動作循環。
-      this.currentGesture = swim.gesture || null;
-      this.gestureElapsed = 0;
-      this.nextGestureAt = 8 + Math.random() * 12;
 
       const collision = collisionSize(image, canvasWidth, canvasHeight);
       this.width = collision.width;
@@ -275,18 +256,6 @@
 
       this.refreshSize();
 
-      this.gestureElapsed += dt;
-      if (this.currentGesture && this.gestureElapsed >= 1.2) {
-        this.currentGesture = null;
-        this.gestureElapsed = 0;
-        this.nextGestureAt = 8 + Math.random() * 12;
-      } else if (!this.currentGesture) {
-        this.nextGestureAt -= dt;
-        if (this.nextGestureAt <= 0) {
-          this.currentGesture = this.species.swim.gesture || null;
-          this.gestureElapsed = 0;
-        }
-      }
     }
 
     update(dt, t) {
@@ -299,34 +268,6 @@
         if (this.speed < 0 && this.x + margin < 0) this.x = this.canvasWidth + margin;
       }
       this.updateVisual(dt);
-    }
-
-    // 手臂：繞肩膀（rig 的 pivot）旋轉一塊切片。角度來自 gesturePose，
-    // 腳底完全不受影響。
-    drawArm(ctx, arm, angle) {
-      if (!arm || !angle) return;
-      const image = this.image;
-      const iw = image.width;
-      const ih = image.height;
-      const dx = -this.renderWidth / 2;
-      const dy = -this.renderHeight / 2;
-      const xScale = this.renderWidth / iw;
-      const yScale = this.renderHeight / ih;
-
-      const sx = arm.x * iw;
-      const sy = arm.y * ih;
-      const sw = arm.width * iw;
-      const sh = arm.height * ih;
-      const pivotX = dx + (sx + sw * arm.pivotX) * xScale;
-      const pivotY = dy + (sy + sh * arm.pivotY) * yScale;
-
-      ctx.save();
-      ctx.translate(pivotX, pivotY);
-      ctx.rotate(angle);
-      ctx.translate(-pivotX, -pivotY);
-      drawImagePart(ctx, image, sx, sy, sw, sh,
-        dx + sx * xScale, dy + sy * yScale, sw * xScale, sh * yScale);
-      ctx.restore();
     }
 
     draw(ctx, t) {
@@ -359,9 +300,6 @@
         ctx.restore();
       }
 
-      const pose = gesturePose(this.currentGesture, this.gestureElapsed);
-      const rig = this.species.swim.rig || {};
-
       ctx.save();
       ctx.globalAlpha = opacity;
       ctx.translate(this.x, y);
@@ -382,8 +320,6 @@
       // 地面與空中角色都是整張紙一次畫完，不再切片。
       ctx.drawImage(this.image, -this.renderWidth / 2, -this.renderHeight / 2, this.renderWidth, this.renderHeight);
 
-      this.drawArm(ctx, rig.leftArm, pose.leftArmAngle);
-      this.drawArm(ctx, rig.rightArm, pose.rightArmAngle);
       ctx.restore();
     }
   }
@@ -397,7 +333,6 @@
     depthScaleForY,
     speedScaleForCanvas,
     transitionOpacity,
-    gesturePose,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CreatureModule = api;

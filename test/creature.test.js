@@ -7,7 +7,6 @@ const {
   transitionOpacity,
   displaySize,
   depthScaleForY,
-  gesturePose,
 } = require('../src/creature.js');
 const { getSpecies } = require('../src/species.js');
 const Movement = require('../src/movement.js');
@@ -90,15 +89,6 @@ test('地面角色整段動畫期間腳底完全不移動', () => {
   }
 });
 
-test('進場後角色會播放一次招呼動作，然後停下來等下一次偶發動作', () => {
-  const creature = makeCreature({ spawn: { x: 400, baseY: 700 } });
-  assert.ok(creature.currentGesture, '新角色進場時應該帶著招呼動作');
-
-  for (let i = 0; i < 100; i++) creature.updateVisual(1 / 60); // 約 1.67 秒
-  assert.equal(creature.currentGesture, null, '招呼播完就該停下，不是一直揮手');
-  assert.ok(creature.nextGestureAt > 0, '應該排定下一次偶發動作');
-});
-
 test('畫面上完全不寫字：角色本身就是畫面，名字留在孩子的圖畫紙上', () => {
   // 決定：螢幕上不顯示人物名稱。孩子會把自己的圖畫紙帶回去，名字在紙上；
   // 螢幕擠到 15 位時名字會互相遮擋（實測大衛的名字被但以理蓋掉、挪亞完全看不到），
@@ -109,8 +99,6 @@ test('畫面上完全不寫字：角色本身就是畫面，名字留在孩子�
 
   // 待機與揮手兩種狀態都不能寫字
   creature.draw(ctx, 0);
-  creature.gestureElapsed = 0;
-  creature.gesture = 'wave';
   creature.draw(ctx, 0.4);
 
   assert.deepEqual(calls.fillText, [], `畫面上不應該有任何文字，實際畫了 ${JSON.stringify(calls.fillText)}`);
@@ -133,19 +121,14 @@ test('進場淡入期間 opacity 從 0 升到 1，退場則降回 0', () => {
   assert.equal(creature.opacity, 0);
 });
 
-test('每一位聖經人物都有手臂關節與招呼動作，且不影響列印線稿', () => {
+test('紙偶關節資料已全部移除，而列印線稿完全不受影響', () => {
+  // 手臂與腿的關節切片都拿掉了（會讓腰帶和腳分岔）。關節資料當初就掛在 swim 上、
+  // 不碰 shapes，所以移除之後列印線稿與掃描遮罩應該一個像素都沒變。
   const { SPECIES } = require('../src/species.js');
   for (const species of SPECIES) {
-    assert.ok(species.swim.gesture, `${species.id} 缺少招呼動作`);
-    assert.ok(species.swim.rig && species.swim.rig.leftArm && species.swim.rig.rightArm,
-      `${species.id} 缺少手臂關節資料`);
-    for (const arm of [species.swim.rig.leftArm, species.swim.rig.rightArm]) {
-      for (const key of ['x', 'y', 'width', 'height', 'pivotX', 'pivotY']) {
-        assert.ok(arm[key] >= 0 && arm[key] <= 1, `${species.id} 的 ${key} 應是 0~1 的比例`);
-      }
-    }
-    // 關節資料掛在 swim 上，不碰 shapes——列印線稿與掃描遮罩完全不受影響
-    assert.ok(Array.isArray(species.shapes) && species.shapes.length > 0);
+    assert.equal(species.swim.rig, undefined, `${species.id} 還留著關節資料`);
+    assert.ok(Array.isArray(species.shapes) && species.shapes.length > 0,
+      `${species.id} 的列印線稿不見了`);
   }
 });
 
@@ -183,11 +166,27 @@ test('地面角色的身體一次畫完，不再切成腿部切片各自旋轉',
   const { ctx, calls } = recordingCtx();
   const creature = makeCreature({ spawn: { x: 400, baseY: 700 } });
   creature.opacity = 1;
-  creature.currentGesture = null; // 手臂不動，只看身體怎麼畫
   creature.draw(ctx, 0.3);
 
   // 紙張厚度兩層 + 身體本體一次 = 3 次繪製，不該再出現局部切片
   assert.equal(calls.images.length, 3, `身體應該一次畫完，實際畫了 ${calls.images.length} 次`);
+  for (const args of calls.images) {
+    assert.equal(args.length, 5,
+      `不該再有取局部來源矩形的切片繪製：${JSON.stringify(args.slice(1))}`);
+  }
+});
+
+test('招呼動作播放中，身體一樣只畫一次——手臂不再是獨立旋轉的切片', () => {
+  // 手臂切片涵蓋圖片高度的 36%~72%，那個範圍包含腰帶。把切片繞肩膀轉，
+  // 切片裡的腰帶就會跟身體上的腰帶錯開，實機上看到的就是腰帶分岔。
+  // 跟腳分岔是同一個機制，所以一併拿掉：整張紙一次畫完。
+  const { ctx, calls } = recordingCtx();
+  const creature = makeCreature({ spawn: { x: 400, baseY: 700 } });
+  creature.opacity = 1;
+  creature.draw(ctx, 0.3);
+
+  assert.equal(calls.images.length, 3,
+    `招呼中也該只有紙張厚度兩層 + 身體一次，實際畫了 ${calls.images.length} 次`);
   for (const args of calls.images) {
     assert.equal(args.length, 5,
       `不該再有取局部來源矩形的切片繪製：${JSON.stringify(args.slice(1))}`);
@@ -240,24 +239,6 @@ test('進場與退場透明度不超出 0 到 1', () => {
   assert.equal(transitionOpacity('exiting', 99), 0);
   assert.equal(transitionOpacity('active', 5), 1);
 });
-
-test('招呼手勢只回傳肢體角度，不改腳底位置', () => {
-  const wave = gesturePose('wave', 0.2);
-  assert.ok(Math.abs(wave.rightArmAngle) > 0.1);
-  assert.equal(wave.footYOffset, 0);
-
-  const raise = gesturePose('raise-hands', 0.2);
-  assert.ok(raise.leftArmAngle < 0 && raise.rightArmAngle > 0, '舉手時兩隻手往相反方向抬起');
-  assert.equal(raise.footYOffset, 0);
-
-  // 沒有手勢時是中性姿勢，腳底一樣不動
-  const none = gesturePose(null, 0.2);
-  assert.equal(none.leftArmAngle, 0);
-  assert.equal(none.rightArmAngle, 0);
-  assert.equal(none.footYOffset, 0);
-});
-
-
 
 test('setMovement 要把移動層的整包狀態帶回角色，否則繞行認定每幀被丟掉', () => {
   // display.html 是把 Creature 實例直接餵給 steerCharacter 的，所以 steerCharacter

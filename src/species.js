@@ -25,8 +25,7 @@
         { tag: 'path', attrs: { d: 'M 254,142 L 284,272 M 255,142 Q 274,126 286,142' }, type: 'line', lineWidth: 8 },
         { tag: 'path', attrs: { d: 'M 140,154 Q 190,177 244,154' }, type: 'line', lineWidth: 7 },
       ],
-      swim: { style: 'walk', speed: [14, 22], amplitude: [3, 5], freq: [5.0, 6.4], sizeScale: 1.0, noFlip: true,
-        rig: { legLeft: 0.43, legRight: 0.72, legTop: 0.75, maxAngle: 0.095 } },
+      swim: { style: 'walk', speed: [14, 22], amplitude: [3, 5], freq: [5.0, 6.4], sizeScale: 1.0, noFlip: true },
     },
     {
       id: 'moses',
@@ -53,8 +52,7 @@
         { tag: 'ellipse', attrs: { cx: 176, cy: 279, rx: 18, ry: 8 }, type: 'region' },
         { tag: 'ellipse', attrs: { cx: 228, cy: 279, rx: 18, ry: 8 }, type: 'region' },
       ],
-      swim: { style: 'walk', speed: [12, 20], amplitude: [3, 5], freq: [4.8, 6.0], sizeScale: 1.0, noFlip: true,
-        rig: { legLeft: 0.42, legRight: 0.70, legTop: 0.76, maxAngle: 0.09 } },
+      swim: { style: 'walk', speed: [12, 20], amplitude: [3, 5], freq: [4.8, 6.0], sizeScale: 1.0, noFlip: true },
     },
     {
       id: 'david',
@@ -80,8 +78,7 @@
         { tag: 'ellipse', attrs: { cx: 173, cy: 278, rx: 18, ry: 8 }, type: 'region' },
         { tag: 'ellipse', attrs: { cx: 224, cy: 278, rx: 18, ry: 8 }, type: 'region' },
       ],
-      swim: { style: 'walk', speed: [22, 32], amplitude: [4, 6], freq: [6.0, 7.4], sizeScale: 0.95, noFlip: true,
-        rig: { legLeft: 0.45, legRight: 0.78, legTop: 0.72, maxAngle: 0.12 } },
+      swim: { style: 'walk', speed: [22, 32], amplitude: [4, 6], freq: [6.0, 7.4], sizeScale: 0.95, noFlip: true },
     },
     {
       id: 'daniel',
@@ -107,8 +104,7 @@
         { tag: 'ellipse', attrs: { cx: 176, cy: 279, rx: 18, ry: 8 }, type: 'region' },
         { tag: 'ellipse', attrs: { cx: 228, cy: 279, rx: 18, ry: 8 }, type: 'region' },
       ],
-      swim: { style: 'walk', speed: [13, 21], amplitude: [3, 5], freq: [4.8, 6.2], sizeScale: 1.0, noFlip: true,
-        rig: { legLeft: 0.30, legRight: 0.70, legTop: 0.75, maxAngle: 0.10 } },
+      swim: { style: 'walk', speed: [13, 21], amplitude: [3, 5], freq: [4.8, 6.2], sizeScale: 1.0, noFlip: true },
     },
     {
       id: 'jonah',
@@ -134,8 +130,7 @@
         { tag: 'ellipse', attrs: { cx: 176, cy: 279, rx: 18, ry: 8 }, type: 'region' },
         { tag: 'ellipse', attrs: { cx: 228, cy: 279, rx: 18, ry: 8 }, type: 'region' },
       ],
-      swim: { style: 'walk', speed: [11, 18], amplitude: [3, 5], freq: [4.6, 5.8], sizeScale: 1.0, noFlip: true,
-        rig: { legLeft: 0.30, legRight: 0.55, legTop: 0.75, maxAngle: 0.09 } },
+      swim: { style: 'walk', speed: [11, 18], amplitude: [3, 5], freq: [4.6, 5.8], sizeScale: 1.0, noFlip: true },
     },
     {
       id: 'shepherd',
@@ -162,8 +157,7 @@
         { tag: 'ellipse', attrs: { cx: 166, cy: 279, rx: 18, ry: 8 }, type: 'region' },
         { tag: 'ellipse', attrs: { cx: 218, cy: 279, rx: 18, ry: 8 }, type: 'region' },
       ],
-      swim: { style: 'walk', speed: [12, 20], amplitude: [3, 5], freq: [4.8, 6.0], sizeScale: 1.05, noFlip: true,
-        rig: { legLeft: 0.53, legRight: 0.78, legTop: 0.75, maxAngle: 0.09 } },
+      swim: { style: 'walk', speed: [12, 20], amplitude: [3, 5], freq: [4.8, 6.0], sizeScale: 1.05, noFlip: true },
     },
     {
       id: 'angel',
@@ -192,61 +186,11 @@
     },
   ];
 
-  // 紙偶的手臂關節資料。座標是相對於角色圖片的比例（0~1），所以掃描出來的原稿
-  // 不論實際像素大小都對得上。pivotX/pivotY 是旋轉支點在該手臂切片內的相對位置
-  // ——肩膀，不是切片中心；繞肩膀轉手臂才不會整條手臂平移錯位。
-  //
-  // 這是**只影響畫面演出**的中繼資料：不改 shapes，所以列印線稿與掃描遮罩完全不變。
-  const PUPPET_RIGS = {
-    noah: {
-      gesture: 'wave',
-      leftArm: { x: 0.24, y: 0.36, width: 0.22, height: 0.36, pivotX: 0.78, pivotY: 0.12 },
-      rightArm: { x: 0.55, y: 0.36, width: 0.22, height: 0.36, pivotX: 0.22, pivotY: 0.12 },
-    },
-    moses: {
-      gesture: 'wave',
-      leftArm: { x: 0.26, y: 0.36, width: 0.20, height: 0.34, pivotX: 0.78, pivotY: 0.12 },
-      rightArm: { x: 0.56, y: 0.36, width: 0.20, height: 0.34, pivotX: 0.22, pivotY: 0.12 },
-    },
-    david: {
-      gesture: 'wave',
-      leftArm: { x: 0.27, y: 0.36, width: 0.19, height: 0.34, pivotX: 0.78, pivotY: 0.12 },
-      rightArm: { x: 0.56, y: 0.36, width: 0.20, height: 0.34, pivotX: 0.22, pivotY: 0.12 },
-    },
-    daniel: {
-      gesture: 'raise-hands',
-      leftArm: { x: 0.25, y: 0.36, width: 0.21, height: 0.36, pivotX: 0.78, pivotY: 0.12 },
-      rightArm: { x: 0.55, y: 0.36, width: 0.21, height: 0.36, pivotX: 0.22, pivotY: 0.12 },
-    },
-    jonah: {
-      gesture: 'wave',
-      leftArm: { x: 0.25, y: 0.36, width: 0.21, height: 0.35, pivotX: 0.78, pivotY: 0.12 },
-      rightArm: { x: 0.55, y: 0.36, width: 0.21, height: 0.35, pivotX: 0.22, pivotY: 0.12 },
-    },
-    shepherd: {
-      gesture: 'wave',
-      leftArm: { x: 0.23, y: 0.36, width: 0.21, height: 0.36, pivotX: 0.78, pivotY: 0.12 },
-      rightArm: { x: 0.53, y: 0.36, width: 0.21, height: 0.36, pivotX: 0.22, pivotY: 0.12 },
-    },
-    angel: {
-      gesture: 'raise-hands',
-      leftArm: { x: 0.20, y: 0.34, width: 0.27, height: 0.34, pivotX: 0.82, pivotY: 0.18 },
-      rightArm: { x: 0.53, y: 0.34, width: 0.27, height: 0.34, pivotX: 0.18, pivotY: 0.18 },
-    },
-  };
-
-  for (const species of SPECIES) {
-    const puppet = PUPPET_RIGS[species.id];
-    if (!puppet) continue;
-    species.swim.gesture = puppet.gesture;
-    species.swim.rig = { ...(species.swim.rig || {}), leftArm: puppet.leftArm, rightArm: puppet.rightArm };
-  }
-
   function getSpecies(id) {
     return SPECIES.find((s) => s.id === id) || null;
   }
 
-  const api = { SPECIES, getSpecies, PUPPET_RIGS };
+  const api = { SPECIES, getSpecies };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Species = api;
 })(typeof window !== 'undefined' ? window : globalThis);
