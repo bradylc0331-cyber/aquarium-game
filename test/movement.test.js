@@ -13,6 +13,7 @@ const {
   findSafeSpawn,
   chooseSafeTarget,
   steerCharacter,
+  recoveryGrid,
 } = require('../src/movement.js');
 
 function openArea(overrides = {}) {
@@ -82,24 +83,49 @@ test('getWalkableArea 對非有限正尺寸立即失敗', () => {
   }
 });
 
-test('personalSpace 以裁切後可見角色與最小間距計算，且不改動角色', () => {
+test('personalSpace 是腳下的地面足跡：以腳底為中心的扁橢圓，且不改動角色', () => {
   const small = { x: 120, baseY: 300, width: 100, height: 200 };
   const large = { x: 400, baseY: 700, width: 200, height: 300 };
   const before = structuredClone(small);
 
+  // 中心就是腳底（baseY），不是身體中段——碰撞看的是腳踩在哪裡
   assert.deepEqual(personalSpace(small), {
     centerX: 120,
-    centerY: 204,
-    radiusX: 60,
-    radiusY: 106,
+    centerY: 300,
+    radiusX: 52,
+    radiusY: 20.8,
   });
   assert.deepEqual(personalSpace(large), {
     centerX: 400,
-    centerY: 556,
-    radiusX: 114,
-    radiusY: 158,
+    centerY: 700,
+    radiusX: 98,
+    radiusY: 39.2,
   });
   assert.deepEqual(small, before);
+});
+
+test('地面足跡不隨角色身高改變——高矮角色只要腳的寬度一樣就佔一樣的地', () => {
+  const short = personalSpace({ x: 0, baseY: 0, width: 100, height: 120 });
+  const tall = personalSpace({ x: 0, baseY: 0, width: 100, height: 400 });
+  assert.deepEqual(short, tall, '身高不該影響地面足跡，否則高個子會佔掉不合理的地面');
+});
+
+test('可行走區容得下規格要求的 15 位角色', () => {
+  // 這是規格「畫面最多同時顯示 15 位角色」與「安全間距不得互相接觸」能否同時成立的守衛。
+  // 用整個人形當碰撞範圍時一排只塞得下約 10 位，15 位永遠達不到。
+  const area = getWalkableArea(1920, 1080);
+  const placed = [];
+  const size = { width: 211, height: 383 }; // Task 4 尺寸公式下的近景角色
+  for (let row = 0; row < 12 && placed.length < 15; row++) {
+    for (let col = 0; col < 12 && placed.length < 15; col++) {
+      const baseY = area.top + (row + 0.5) * ((area.bottom - area.top) / 6);
+      const x = area.left + (col + 0.5) * ((area.right - area.left) / 10);
+      const candidate = { ...size, x, baseY };
+      if (baseY > area.bottom || x > area.right) continue;
+      if (isSafe(candidate, placed, area)) placed.push(candidate);
+    }
+  }
+  assert.equal(placed.length, 15, `可行走區只放得下 ${placed.length} 位，規格要求 15 位`);
 });
 
 test('personalSpace 拒絕缺漏、非有限或非正的必要幾何', () => {
@@ -153,7 +179,7 @@ test('findSafeSpawn 依序探索左、右、下邊緣並只回傳安全出生點
 
   const spawn = findSafeSpawn(size, [], area, random);
 
-  assert.deepEqual(spawn, { x: 20, baseY: 50 });
+  assert.deepEqual(spawn, { x: 18.4, baseY: 50 });
   assert.equal(isSafe({ ...size, ...spawn }, [], area), true);
   assert.equal(random.calls(), 1);
 });
@@ -228,9 +254,11 @@ test('steerCharacter 預見障礙後側移或減速，不會走進障礙', () =>
 });
 
 test('steerCharacter 將位置限制在邊界，沒有安全前進路徑時保持安全靜止', () => {
-  const atEdge = character({ x: 970, targetX: 1200 });
+  // 停在足跡剛好貼齊右邊界的位置：再往右就會出界，所以應該原地不動。
+  const maxX = openArea().right - personalSpace(character()).radiusX;
+  const atEdge = character({ x: maxX, targetX: 1200 });
   const edgeResult = steerCharacter(atEdge, [atEdge], openArea(), 1);
-  assert.equal(edgeResult.x, 970);
+  assert.equal(edgeResult.x, maxX);
   assert.equal(edgeResult.vx, 0);
 
   const blocked = character({ x: 300, targetX: 800 });
@@ -247,7 +275,7 @@ test('steerCharacter 將起始越界位置投影到存在的安全位置', () =>
   const result = steerCharacter(self, [self], area, 0.1);
 
   assert.equal(isSafe(result, [], area), true);
-  assert.ok(result.x >= 30);
+  assert.ok(result.x >= area.left + personalSpace(self).radiusX);
   assert.ok(result.baseY <= area.bottom);
 });
 
@@ -340,37 +368,200 @@ test('recovery 找得到只在斜向開口外的安全點，不得誤報 blocked
   assert.ok(['x', 'baseY', 'vx', 'vy'].every((key) => Number.isFinite(result[key])));
 });
 
-test('recovery 會繞過障礙走 staircase 路徑，不穿越非初始障礙', () => {
-  // 只有一道牆，牆上開一個縫；縫的位置讓 anchor 到安全區的直線一定會切到牆角，
-  // 因此必須真的「先上再右」繞過去，不能靠單一直線射線解決。
+// 牆上開一道 110px 的縫，右側是整片開闊安全區。起點在左半邊的大障礙內（初始重疊）。
+// 這是 recovery 最容易錯的形狀：窄通道的入口節點很容易先被某條斜邊擋到，
+// 如果搜尋在驗證邊之前就把節點記成「已訪問」，整條通道會被永久丟棄而誤報 blocked。
+function narrowGapArea() {
+  return {
+    left: 0,
+    right: 1000,
+    top: 0,
+    bottom: 800,
+    obstacles: [
+      { x: 0, y: 0, width: 400, height: 800 },
+      { x: 400, y: 0, width: 60, height: 93 },
+      { x: 400, y: 203, width: 60, height: 597 },
+    ],
+  };
+}
+
+test('recovery 走得過窄縫：入口節點先被擋住的邊碰到，也不能被永久丟棄', () => {
+  const area = narrowGapArea();
+  const self = character({ x: 77, baseY: 60, targetX: 900, targetY: 400 });
+
+  assert.equal(isSafe(self, [], area), false, '起點必須不安全，否則根本不會進入 recovery');
+
+  const result = steerCharacter(self, [self], area, 0.1);
+
+  assert.equal(result.blocked, false, '縫是走得過去的，不得回報 blocked');
+  assert.equal(isSafe(result, [], area), true);
+  // BFS 取的是最近的安全節點，所以正確答案是「站在縫裡」而不是「衝到牆右側」。
+  // 關鍵是它必須離開起點所在的大障礙、進到縫的位置，代表通道沒有被丟棄。
+  assert.ok(result.x > 400, `應該走進縫的位置，實際落在 x=${result.x}`);
+  assert.ok(result.baseY > 93 && result.baseY < 250, `應該落在縫的高度，實際 baseY=${result.baseY}`);
+});
+
+test('recovery 繞行時起點必須不安全，且回傳點是經合法路徑可達的', () => {
+  // 牆把場地切成左右兩半，只在下方留一個開口；起點埋在左半邊的障礙裡。
   const area = openArea({
     obstacles: [
+      { x: 0, y: 0, width: 400, height: 800 },
       { x: 400, y: 0, width: 60, height: 520 },
       { x: 400, y: 640, width: 60, height: 160 },
     ],
   });
   const self = character({ x: 200, baseY: 700, targetX: 900, targetY: 700 });
 
+  assert.equal(isSafe(self, [], area), false, '起點必須不安全，否則走的是正常操舵路徑而非 recovery');
+
   const result = steerCharacter(self, [self], area, 0.1);
 
+  assert.equal(result.blocked, false);
   assert.equal(isSafe(result, [], area), true);
   for (const obstacle of area.obstacles) {
     assert.equal(hitsObstacle(personalSpace(result), obstacle), false);
   }
 });
 
-test('recovery 在大畫面配小角色時仍受節點預算限制，不會卡住 frame', () => {
-  // 很大的可行走區加上很小的角色：若網格解析度只看角色半徑，節點數會爆炸。
-  // 這裡確認搜尋會自動放粗步長，在合理時間內結束並回傳安全結果。
-  const area = openArea({ right: 4000, bottom: 3000 });
-  const self = character({ x: 10, baseY: 2990, width: 6, height: 10, targetX: 3900, targetY: 100 });
+test('recovery 不得穿越非初始障礙：牆完全封死時只能回報 blocked', () => {
+  // x∈[640,680] 是一道上下貫通、完全密封的牆。牆的右側有大片安全區，
+  // 但物理上到不了。若路徑驗證失效，角色會直接瞬移穿牆。
+  const area = openArea({
+    obstacles: [
+      { x: 0, y: 0, width: 640, height: 800 },
+      { x: 640, y: 0, width: 40, height: 800 },
+    ],
+  });
+  const self = character({ x: 300, baseY: 400, targetX: 960, targetY: 400 });
+
+  let safeBeyond = 0;
+  for (let x = 700; x <= 990; x += 5) {
+    for (let baseY = 5; baseY <= 795; baseY += 5) {
+      if (isSafe({ ...self, x, baseY }, [], area)) safeBeyond++;
+    }
+  }
+  assert.ok(safeBeyond > 1000, '牆的另一側確實有大片安全區（但到不了）');
+
+  const result = steerCharacter(self, [self], area, 0.1);
+
+  assert.equal(result.blocked, true, '密封牆後方到不了，只能 blocked');
+  assert.ok(result.x < 640, `不得跨到牆的另一側，實際 x=${result.x}`);
+});
+
+test('recovery 不得穿越非初始角色：由角色排成的牆同樣擋得住', () => {
+  const area = openArea();
+  const self = character({ x: 300, baseY: 400, targetX: 960, targetY: 400 });
+  // 用一排彼此緊貼的角色，在 x≈640 築一道從上到下的牆
+  const wall = [];
+  for (let baseY = -100; baseY <= 900; baseY += 40) {
+    wall.push(character({ id: `w${baseY}`, x: 640, baseY, width: 40, height: 80 }));
+  }
+  // 讓 self 起點與其中一位重疊，確保進入 recovery
+  const overlapping = character({ id: 'overlap', x: 300, baseY: 400, width: 180, height: 280 });
+  const characters = [self, overlapping, ...wall];
+
+  const result = steerCharacter(self, characters, area, 0.1);
+
+  assert.ok(result.x < 640, `不得穿過角色牆，實際 x=${result.x}`);
+  const others = characters.filter((c) => c !== self);
+  if (!result.blocked) assert.equal(isSafe(result, others, area), true);
+});
+
+test('recovery 的搜尋空間有限：兩軸步長各自比對應半徑細，節點數不超出預算', () => {
+  const anchor = { x: 500, baseY: 400 };
+
+  // 網格形狀要跟角色形狀一致：足跡是扁的，所以垂直步長必須比水平步長細，
+  // 否則不是粗到跨過上下的窄縫，就是水平方向節點數暴增。
+  const normal = character({ width: 40, height: 80 });
+  const space = personalSpace(normal);
+  const grid = recoveryGrid(normal, getWalkableArea(1920, 1080), anchor);
+  assert.ok(grid.stepY < grid.stepX, '扁足跡對應的網格，垂直步長要比水平細');
+  assert.ok(grid.stepX < space.radiusX * 2, `水平步長 ${grid.stepX} 不得粗過足跡寬度`);
+  assert.ok(grid.stepY < space.radiusY * 2, `垂直步長 ${grid.stepY} 不得粗過足跡高度`);
+  assert.ok(grid.nodeCount <= 6000, `節點數 ${grid.nodeCount} 超出預算`);
+
+  // 大畫面配極小角色：純看角色半徑會讓節點數爆炸，必須自動放粗步長
+  const tiny = character({ width: 6, height: 10 });
+  const hugeArea = openArea({ right: 4000, bottom: 3000 });
+  const tinyGrid = recoveryGrid(tiny, hugeArea, { x: 2000, baseY: 1500 });
+  assert.ok(tinyGrid.nodeCount <= 6000, `節點數 ${tinyGrid.nodeCount} 超出預算`);
+  assert.ok(
+    tinyGrid.stepX > recoveryGrid(tiny, openArea(), anchor).stepX,
+    '大場地時步長要放粗',
+  );
+});
+
+test('recovery 取最近的安全點，不會無謂地把角色彈到遠處', () => {
+  // 角色卡在一個小障礙裡，四周都是開闊空地：最近的出口只有幾十像素遠，
+  // 但場地角落同樣是「安全」的。若挑的不是最近的點，畫面上角色會突然瞬移。
+  const obstacle = { x: 470, y: 350, width: 60, height: 100 };
+  const area = openArea({ obstacles: [obstacle] });
+  const self = character({ x: 500, baseY: 400, targetX: 900, targetY: 400 });
+
+  assert.equal(isSafe(self, [], area), false, '起點必須不安全，否則不會進入 BFS');
+  const result = steerCharacter(self, [self], area, 0.1);
+
+  assert.equal(isSafe(result, [], area), true);
+  const moved = Math.hypot(result.x - self.x, result.baseY - self.baseY);
+  const dimensions = personalSpace(self);
+  assert.ok(
+    moved <= dimensions.radiusX * 2.5,
+    `復位應就近脫困（位移 ${moved.toFixed(1)}，上限 ${(dimensions.radiusX * 2.5).toFixed(1)}）`,
+  );
+});
+
+test('安全區只在遠處角落時仍找得到，不得因為預算被浪費而誤報 blocked', () => {
+  // 這一題守的是網格上下界：BFS 的節點預算是照可行走區大小算的，
+  // 若允許往場外展開，那些格子 clamp 後全部擠在同一批邊界點上，
+  // 會把預算吃光，於是明明走得到的遠處安全區被誤判成 blocked。
+  const area = openArea({
+    right: 1600,
+    bottom: 1000,
+    obstacles: [
+      { x: 0, y: 0, width: 1400, height: 1000 },  // 起點在裡面（初始重疊，允許離開）
+      { x: 1400, y: 0, width: 200, height: 700 }, // 只在右下角留一個口袋
+    ],
+  });
+  const self = character({ x: 100, baseY: 500, targetX: 1500, targetY: 900 });
+
+  assert.equal(isSafe(self, [], area), false);
+  const result = steerCharacter(self, [self], area, 0.1);
+
+  assert.equal(result.blocked, false, '右下角口袋走得到，不得回報 blocked');
+  assert.equal(isSafe(result, [], area), true);
+  assert.ok(result.x > 1400, `應該抵達右下角口袋，實際 x=${result.x}`);
+});
+
+test('recovery 的網格範圍剛好涵蓋可行走區，不往場外無限展開', () => {
+  const area = openArea({ right: 1000, bottom: 800 });
+  const anchor = { x: 500, baseY: 400 };
+  const grid = recoveryGrid(character(), area, anchor);
+
+  // 網格最遠只多留一圈，讓 clamp 後的邊界位置走得到；再多就是浪費預算
+  const leftmost = anchor.x + grid.minGx * grid.stepX;
+  const rightmost = anchor.x + grid.maxGx * grid.stepX;
+  const topmost = anchor.baseY + grid.minGy * grid.stepY;
+  const bottommost = anchor.baseY + grid.maxGy * grid.stepY;
+
+  assert.ok(leftmost <= area.left && leftmost > area.left - 2 * grid.stepX,
+    `左界 ${leftmost} 應剛好蓋過 ${area.left} 一圈`);
+  assert.ok(rightmost >= area.right && rightmost < area.right + 2 * grid.stepX,
+    `右界 ${rightmost} 應剛好蓋過 ${area.right} 一圈`);
+  assert.ok(topmost <= area.top && topmost > area.top - 2 * grid.stepY);
+  assert.ok(bottommost >= area.bottom && bottommost < area.bottom + 2 * grid.stepY);
+});
+
+test('recovery 在完全封閉的大場地仍在 frame 預算內結束', () => {
+  // 這是最壞情況：必須把整個網格窮盡才能宣告 blocked。
+  const area = openArea({ right: 1920, bottom: 1080, obstacles: [{ x: 0, y: 0, width: 1920, height: 1080 }] });
+  const self = character({ x: 900, baseY: 540, targetX: 1800, targetY: 1000 });
 
   const started = process.hrtime.bigint();
   const result = steerCharacter(self, [self], area, 0.1);
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
 
-  assert.equal(isSafe(result, [], area), true);
-  assert.ok(elapsedMs < 250, `復位搜尋耗時 ${elapsedMs.toFixed(1)}ms，超出可接受範圍`);
+  assert.equal(result.blocked, true, '完全封閉時應窮盡搜尋後回報 blocked');
+  assert.ok(elapsedMs < 60, `單一角色最壞情況復位耗時 ${elapsedMs.toFixed(1)}ms，超出可接受範圍`);
 });
 
 test('blocked 只標記真正無安全點的結果，下一次安全更新會清除 stale marker', () => {

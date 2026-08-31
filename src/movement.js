@@ -2,6 +2,11 @@
   const VERTICAL_SPEED_FACTOR = 0.55;
   const COLLISION_EPSILON = 1e-12;
 
+  // 地面足跡的寬度相對角色可見寬度的比例（腳站的範圍比整個人窄）。
+  const FOOTPRINT_WIDTH_FACTOR = 0.42;
+  // 地面上的圓在 2.5D 俯角下被壓扁的比例。0.4 對應一個自然的俯視角度。
+  const GROUND_PERSPECTIVE = 0.4;
+
   // 復位搜尋（recoverSafePosition）的有限搜尋空間定義。
   // 步長取角色安全橢圓短半徑的一半：夠細，鑽得過只有角色寬度的縫隙。
   const RECOVERY_STEP_FACTOR = 0.5;
@@ -10,6 +15,9 @@
   // 節點預算。復位是在動畫 frame 內同步跑的，必須有上限；超過就讓步長變粗，
   // 而不是讓搜尋無限展開。
   const RECOVERY_MAX_NODES = 6000;
+  // 步長放粗的絕對上限。沒有這個上限，極端輸入（例如面積大到 nodeCount 永遠超標）
+  // 會讓放粗迴圈跑不完。到頂之後就接受節點數超標，讓 BFS 自己被 nodeCount 收斂。
+  const RECOVERY_ABSOLUTE_MAX_STEP = 4096;
   const NEIGHBOR_OFFSETS = [
     [1, 0], [-1, 0], [0, 1], [0, -1],
     [1, 1], [1, -1], [-1, 1], [-1, -1],
@@ -36,6 +44,15 @@
     };
   }
 
+  // 角色的碰撞範圍是**腳下的地面足跡**，不是整個人形。
+  //
+  // 這是 2.5D 場景的標準做法：角色站在地面上，會不會撞在一起取決於腳踩的位置，
+  // 而不是上半身在畫面上有沒有重疊——不同景深的角色本來就會前後遮擋，那是景深，
+  // 不是碰撞。用整個人形當碰撞範圍會讓可行走區一排只容得下約 10 位角色，
+  // 規格要求的 15 位永遠達不到。
+  //
+  // 地面上的圓形足跡在 2.5D 俯角下看起來是壓扁的橢圓，所以 radiusY 由 radiusX
+  // 乘上透視壓縮比得到，而不是由角色身高得到。
   function personalSpace(character) {
     if (
       !character
@@ -50,11 +67,12 @@
     }
 
     const gap = Math.max(10, character.width * 0.07);
+    const radiusX = character.width * FOOTPRINT_WIDTH_FACTOR + gap;
     return {
       centerX: character.x,
-      centerY: character.baseY - character.height * 0.48,
-      radiusX: character.width * 0.5 + gap,
-      radiusY: character.height * 0.48 + gap,
+      centerY: character.baseY,
+      radiusX,
+      radiusY: radiusX * GROUND_PERSPECTIVE,
     };
   }
 
@@ -296,31 +314,51 @@
     return true;
   }
 
-  // 復位搜尋的網格解析度。步長由角色安全橢圓的短半徑決定（走得夠細才鑽得過窄縫），
-  // 但同時受上下限與 RECOVERY_MAX_NODES 節點預算限制——大畫面配上很小的角色時，
-  // 步長會自動放大，讓搜尋空間維持有限且可在一個 frame 內走完。
-  function recoveryGrid(self, area) {
+  // 復位搜尋的有限搜尋空間：解析度（步長）與網格座標範圍。
+  //
+  // 步長由角色安全橢圓的短半徑決定——要比角色本身細，才鑽得過只有角色寬度的縫隙。
+  // 但整個網格的節點數必須落在 RECOVERY_MAX_NODES 以內：復位是在動畫 frame 內同步
+  // 跑完的，大畫面配上很小的角色會讓節點數爆炸，此時寧可把步長放粗。
+  //
+  // 這裡回傳的 nodeCount 是**實際會走到的網格大小**（含邊界外那一圈 margin），
+  // BFS 直接拿它當上限，所以「窮盡整個搜尋空間」是真的窮盡，不會在還沒走完時
+  // 就被一個對不上的預算數字切斷。
+  // 步長分 X／Y 兩軸。地面足跡是壓扁的橢圓（寬遠大於高），用單一步長會顧此失彼：
+  // 取寬的那軸會粗到跨過上下的窄縫，取高的那軸則讓水平方向的節點數暴增。
+  // 兩軸各自對應自己的半徑，網格形狀才跟角色形狀一致。
+  function recoveryGrid(self, area, anchor) {
     const dimensions = personalSpace(self);
-    const minRadius = Math.min(dimensions.radiusX, dimensions.radiusY);
-    const width = area.right - area.left;
-    const height = area.bottom - area.top;
-    let step = Math.min(
+    const initial = (radius) => Math.min(
       RECOVERY_MAX_STEP,
-      Math.max(RECOVERY_MIN_STEP, minRadius * RECOVERY_STEP_FACTOR),
+      Math.max(RECOVERY_MIN_STEP, radius * RECOVERY_STEP_FACTOR),
     );
+    let stepX = initial(dimensions.radiusX);
+    let stepY = initial(dimensions.radiusY);
 
-    // 節點數 = (寬/步長 + 1) x (高/步長 + 1)。超出預算就等比放大步長，
-    // 寧可解析度變粗，也不要讓同步搜尋把 Canvas frame 卡住。
-    const nodesFor = (candidate) => (
-      (Math.floor(width / candidate) + 1) * (Math.floor(height / candidate) + 1)
-    );
-    if (nodesFor(step) > RECOVERY_MAX_NODES) {
-      const scaled = Math.sqrt((width * height) / RECOVERY_MAX_NODES);
-      step = Math.max(step, scaled);
-      while (nodesFor(step) > RECOVERY_MAX_NODES) step *= 1.25;
+    // 網格多留一圈（-1 / +1），讓 clamp 後的邊界位置也走得到。
+    const boundsFor = (sx, sy) => {
+      const minGx = Math.ceil((area.left - anchor.x) / sx) - 1;
+      const maxGx = Math.floor((area.right - anchor.x) / sx) + 1;
+      const minGy = Math.ceil((area.top - anchor.baseY) / sy) - 1;
+      const maxGy = Math.floor((area.bottom - anchor.baseY) / sy) + 1;
+      return {
+        minGx, maxGx, minGy, maxGy,
+        nodeCount: (maxGx - minGx + 1) * (maxGy - minGy + 1),
+      };
+    };
+
+    // 超出預算時兩軸等比放粗，維持網格與角色的形狀比例。
+    let bounds = boundsFor(stepX, stepY);
+    while (
+      bounds.nodeCount > RECOVERY_MAX_NODES
+      && Math.max(stepX, stepY) < RECOVERY_ABSOLUTE_MAX_STEP
+    ) {
+      stepX = Math.min(stepX * 1.25, RECOVERY_ABSOLUTE_MAX_STEP);
+      stepY = Math.min(stepY * 1.25, RECOVERY_ABSOLUTE_MAX_STEP);
+      bounds = boundsFor(stepX, stepY);
     }
 
-    return { step };
+    return { stepX, stepY, ...bounds };
   }
 
   // 有限解析度的 8-neighbor BFS。
@@ -342,27 +380,21 @@
 
     const guards = recoveryGuards(anchor, self, others, area);
     const dimensions = personalSpace(self);
-    const { step } = recoveryGrid(self, area);
+    // 網格座標的有限範圍：涵蓋整個可行走區域。沒有這個界線，BFS 會往區域外無限展開，
+    // 而那些格子 clamp 後全部擠在同一批邊界點上，白白吃掉預算、漏掉區域內真正的安全點。
+    const { stepX, stepY, minGx, maxGx, minGy, maxGy, nodeCount } = recoveryGrid(self, area, anchor);
     const positionAt = (gx, gy) => clampPosition({
       ...self,
-      x: anchor.x + gx * step,
-      baseY: anchor.baseY + gy * step,
+      x: anchor.x + gx * stepX,
+      baseY: anchor.baseY + gy * stepY,
     }, area);
-
-    // 網格座標的有限範圍：涵蓋整個可行走區域，並多留一圈讓 clamp 後的邊界位置也走得到。
-    // 沒有這個界線，BFS 會往區域外無限展開，而那些格子 clamp 後全部擠在同一批邊界點上，
-    // 白白吃掉節點預算、反而漏掉區域內部真正的安全點。
-    const minGx = Math.ceil((area.left - anchor.x) / step) - 1;
-    const maxGx = Math.floor((area.right - anchor.x) / step) + 1;
-    const minGy = Math.ceil((area.top - anchor.baseY) / step) - 1;
-    const maxGy = Math.floor((area.bottom - anchor.baseY) / step) + 1;
 
     // 以網格座標去重（不是以 clamp 後的位置），確保邊界格仍能各自往外展開。
     const visited = new Set(['0,0']);
     let frontier = [{ gx: 0, gy: 0, position: anchor }];
     let expanded = 0;
 
-    while (frontier.length > 0 && expanded < RECOVERY_MAX_NODES) {
+    while (frontier.length > 0 && expanded <= nodeCount) {
       const nextFrontier = [];
       let best = null;
 
@@ -374,10 +406,14 @@
           if (gx < minGx || gx > maxGx || gy < minGy || gy > maxGy) continue;
           const key = `${gx},${gy}`;
           if (visited.has(key)) continue;
-          visited.add(key);
 
           const position = positionAt(gx, gy);
+          // 只有「這條邊真的走得過去」才算拜訪過。若在驗證前就標記 visited，
+          // 一個先被擋住的邊會把該節點連同它後面整片區域永久丟掉——即使稍後
+          // 有另一條合法的邊走得到它。窄通道的入口正好最容易先被斜邊擋到，
+          // 於是明明走得過去的縫會被誤判成 blocked。
           if (!segmentIsClear(node.position, position, self, dimensions, guards)) continue;
+          visited.add(key);
 
           if (isSafe({ ...self, x: position.x, baseY: position.baseY }, others, area)) {
             // 同一層裡挑歐氏距離最近的，復位才不會無謂地跳很遠。
@@ -482,6 +518,8 @@
     findSafeSpawn,
     chooseSafeTarget,
     steerCharacter,
+    // 匯出給測試斷言「有限搜尋空間」的解析度與大小；正式流程不需要直接呼叫。
+    recoveryGrid,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Movement = api;
