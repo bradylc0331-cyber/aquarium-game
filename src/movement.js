@@ -25,9 +25,21 @@
   // 門檻用「自由行走距離的比例」而不是固定像素，才不會隨解析度或角色大小失準。
   const PROGRESS_WINDOW_SECONDS = 2;
   const MIN_NET_PROGRESS_FRACTION = 0.15;
-  // 距離轉角多近算「走到了」，以足跡半徑為單位。規劃與消耗轉角共用同一個值，
-  // 否則會規劃出一個「剛規劃好就算走到了」的轉角，變成空轉。
+  // 距離轉角多近算「走到了」，以足跡半徑為單位。
   const PATH_REACH_FACTOR = 0.6;
+  // 一條規劃出來的路，終點至少要有這麼多個「走到了」半徑那麼遠。
+  // 等於 1 的話，路的長度跟消耗半徑同級，剛規劃好就被吃掉，等於空轉。
+  const PATH_MIN_ADVANCE_FACTOR = 3;
+  // 連續規劃幾次都沒換來實際進展之後，就不再用「有路可走」壓住 stalled。
+  //
+  // 光把路變嚴格還不夠：路可以每一條都合格（夠長、終點也確實更靠近目標），
+  // 角色卻沿著它走不出去，兩秒後再規劃一條新的，如此反覆。實測 4K 下有角色
+  // 這樣連續 20.5 秒困在 15px 的框裡，期間走了 2079px（等於自由行走距離的
+  // 92%），而且幾乎每一幀都握著一條「合格」的路。
+  // 規劃是一個**行動**，不是「我沒卡住」的證明；試過幾次仍無進展就照實回報。
+  const PATH_MAX_ATTEMPTS = 2;
+  // 預測點被邊界 clamp 掉超過足跡半徑的這個比例時，就當作「接近邊界」而提前轉向。
+  const BOUNDARY_TURN_FACTOR = 0.5;
   const COLLISION_EPSILON = 1e-12;
 
   // 地面足跡的寬度相對角色可見寬度的比例（腳站的範圍比整個人窄）。
@@ -465,6 +477,10 @@
   // 連續空間的不存在性無法用有限搜尋證明；規格與測試都以此解析度為準。
   function recoverSafePosition(self, others, area) {
     const anchor = clampPosition(self, area);
+    // 復位之後角色被搬到別的位置了：舊的 stalled 與規劃好的路都是針對搬移**前**
+    // 的處境算出來的，必須一併清掉。只重設 blocked 的話，剛復位的角色會帶著
+    // 一個殘留的 stalled=true 出去，整合層每一幀都重新挑目標（一次最多 60 次
+    // isSafe 探測），而且會照著一條從舊位置規劃的路走。
     const resultAt = (position) => ({
       ...self,
       x: position.x,
@@ -472,6 +488,11 @@
       vx: 0,
       vy: 0,
       blocked: false,
+      stalled: false,
+      path: null,
+      pathGoalX: undefined,
+      pathGoalY: undefined,
+      planAttempts: 0,
     });
     if (isSafe({ ...self, x: anchor.x, baseY: anchor.baseY }, others, area)) return resultAt(anchor);
 
@@ -548,7 +569,9 @@
   // 復位是「從不安全的地方往外找安全點」，這裡是「在安全點之間找路」。
   //
   // 只在偵測到卡住時才呼叫（每位角色 30 秒內數次），不是每一幀，所以負擔可以接受。
-  function planPath(self, others, area, goalX, goalY) {
+  // 從角色現在的位置出發，走訪網格上所有**真的走得到**的安全節點。
+  // planPath（找路）與 chooseReachableTarget（挑目標）共用這一趟 BFS。
+  function exploreReachable(self, others, area) {
     const anchor = clampPosition(self, area);
     if (!isSafe({ ...self, x: anchor.x, baseY: anchor.baseY }, others, area)) return null;
 
@@ -566,8 +589,6 @@
     const nodes = new Map([[startKey, { gx: 0, gy: 0, position: anchor }]]);
     let frontier = [nodes.get(startKey)];
     let expanded = 0;
-    let bestKey = null;
-    let bestDistance = Math.hypot(goalX - anchor.x, goalY - anchor.baseY);
 
     while (frontier.length > 0 && expanded <= nodeCount) {
       const nextFrontier = [];
@@ -588,15 +609,57 @@
           parents.set(key, `${node.gx},${node.gy}`);
           const entry = { gx, gy, position };
           nodes.set(key, entry);
-          const distance = Math.hypot(goalX - position.x, goalY - position.baseY);
-          if (distance < bestDistance) {
-            bestDistance = distance;
-            bestKey = key;
-          }
           nextFrontier.push(entry);
         }
       }
       frontier = nextFrontier;
+    }
+
+    return { anchor, parents, nodes, dimensions, guards, startKey };
+  }
+
+  // 挑一個**真的走得到**的目標點。
+  //
+  // chooseSafeTarget 只保證目標本身是安全的，不保證走得到。可行走區被河流切成
+  // 兩半時，隨機挑到的點很可能在另一岸——角色朝著它撞兩秒、判定卡住、換一個
+  // 目標、又在對岸，如此循環。實測有角色 30 秒內被換了 12 次目標，走了 580px
+  // （自由行走距離的 48%），卻始終在 39px 的框裡打轉，而牠四周有 21/36 個
+  // 方向是通的、最近的鄰居在 147px 外——牠沒有被圍住，只是一直被派去到不了的地方。
+  //
+  // 這一趟 BFS 跟 planPath 用的是同一個，成本相當；只在角色回報卡住時才呼叫。
+  function chooseReachableTarget(self, characters, area, random = Math.random) {
+    if (!Array.isArray(characters)) throw new TypeError('characters must be an array');
+    validateArea(area);
+    if (typeof random !== 'function') throw new TypeError('random must be a function');
+
+    const others = characters.filter((character) => character !== self);
+    const explored = exploreReachable(self, others, area);
+    if (!explored) return chooseSafeTarget(self, characters, area, random);
+
+    // 太近的點不算數——換一個就在腳邊的目標等於沒換。
+    const minimum = personalSpace(self).radiusX * 2;
+    const candidates = [];
+    for (const node of explored.nodes.values()) {
+      const distance = Math.hypot(node.position.x - self.x, node.position.baseY - self.baseY);
+      if (distance >= minimum) candidates.push(node.position);
+    }
+    if (candidates.length === 0) return chooseSafeTarget(self, characters, area, random);
+
+    const pick = candidates[Math.min(candidates.length - 1, Math.floor(nextRandom(random) * candidates.length))];
+    return { targetX: pick.x, targetY: pick.baseY };
+  }
+
+  function planPath(self, others, area, goalX, goalY) {
+    const explored = exploreReachable(self, others, area);
+    if (!explored) return null;
+    const { anchor, parents, nodes, dimensions, guards } = explored;
+
+    let bestKey = null;
+    let bestDistance = Math.hypot(goalX - anchor.x, goalY - anchor.baseY);
+    for (const [key, node] of nodes) {
+      if (key === '0,0') continue;
+      const distance = Math.hypot(goalX - node.position.x, goalY - node.position.baseY);
+      if (distance < bestDistance) { bestDistance = distance; bestKey = key; }
     }
 
     if (!bestKey) return null; // 沒有任何節點比現在更靠近目標
@@ -634,7 +697,32 @@
     // 而不是假裝有路可走。
     const reachRadius = dimensions.radiusX * PATH_REACH_FACTOR;
     const last = corners[corners.length - 1];
-    if (!last || Math.hypot(last.x - anchor.x, last.baseY - anchor.baseY) < reachRadius) return null;
+    if (!last) return null;
+
+    // 一條路要算數，得同時滿足兩件事，缺一不可：
+    //
+    // 1. 終點要離現在**夠遠**。用 reachRadius 當門檻是不夠的——那正好是「算是
+    //    走到了」的半徑，於是長度剛好超過一點點的路會在幾幀之內被消耗掉，角色
+    //    回到原點，而這段期間 stalled 被壓下去、觀察窗也被重設。實測角色就是
+    //    這樣每兩秒循環一次，連續 64 秒困在 34x15px 的框裡走了 1917px，
+    //    stalled 一次都沒回報。
+    // 2. 終點要比現在**明顯更接近目標**。BFS 挑的是「找到的最接近目標的節點」，
+    //    但那可能只近了 35px（路被別的角色堵住時就會這樣）。這種路不是路。
+    //
+    // 兩條都不過就回傳 null，讓 stalled 照實回報，整合層去換一個目標。
+    //
+    // 誠實說明份量：真正解掉「反覆規劃、反覆卡住」的是下面的 PATH_MAX_ATTEMPTS。
+    // 這兩條門檻各自拿掉都量不出差別（最長困住時間 4.3/4.4 秒 → 5.1/4.5 秒，
+    // 落在雜訊裡），但**兩條一起**拿掉會從 4.3/4.4 秒退化到 7.6/7.1 秒、
+    // 期間走的距離也從 50/85px 增加到 140/114px。所以兩條一起留著，
+    // 但沒有任何單一測試釘得住其中一條——這是量出來的，不是猜的。
+    const advance = Math.hypot(last.x - anchor.x, last.baseY - anchor.baseY);
+    if (advance < reachRadius * PATH_MIN_ADVANCE_FACTOR) return null;
+
+    const before = Math.hypot(goalX - anchor.x, goalY - anchor.baseY);
+    const after = Math.hypot(goalX - last.x, goalY - last.baseY);
+    if (before - after < reachRadius) return null;
+
     return corners;
   }
 
@@ -654,7 +742,7 @@
     for (const character of others) personalSpace(character);
     if (!isSafe(self, others, area)) return recoverSafePosition(self, others, area);
     if (dt === 0) {
-      return { ...self, x: self.x, baseY: self.baseY, vx: 0, vy: 0, blocked: false };
+      return { ...self, x: self.x, baseY: self.baseY, vx: 0, vy: 0, blocked: false, stalled: false };
     }
 
     // 中繼點（繞遠路用）優先於最終目標。到了就丟掉，改朝真正的目標走；
@@ -700,6 +788,7 @@
     let anchorDistance = finite(self.progressAnchorDistance) ? self.progressAnchorDistance : distance;
     let anchorGoalX = finite(self.progressGoalX) ? self.progressGoalX : goalX;
     let anchorGoalY = finite(self.progressGoalY) ? self.progressGoalY : goalY;
+    let planAttempts = Number.isInteger(self.planAttempts) ? self.planAttempts : 0;
     if (Math.abs(anchorGoalX - goalX) > 1e-6 || Math.abs(anchorGoalY - goalY) > 1e-6) {
       anchorDistance = distance;
       anchorGoalX = goalX;
@@ -707,7 +796,9 @@
       progressElapsed = dt;
     }
     if (distance === 0) {
-      return { ...self, x: self.x, baseY: self.baseY, vx: 0, vy: 0, blocked: false };
+      // 已經站在目標上：這不是「去不了」，是「到了」。stalled 必須是 false，
+      // 否則整合層會把一位剛抵達的角色當成卡住，每一幀重挑目標。
+      return { ...self, x: self.x, baseY: self.baseY, vx: 0, vy: 0, blocked: false, stalled: false };
     }
 
     // 速度一律由「單位方向 + 速率」組出來，不要直接旋轉速度向量：vy 帶著
@@ -722,12 +813,21 @@
 
     const desired = velocityAlong(dirX, dirY, 1);
     const lookAhead = Math.max(dt, 0.75);
-    const predicted = clampPosition({
-      ...self,
-      x: self.x + desired.vx * lookAhead,
-      baseY: self.baseY + desired.vy * lookAhead,
-    }, area);
-    const threatened = !pathIsSafe(self, others, area, predicted.x, predicted.baseY);
+    const rawAheadX = self.x + desired.vx * lookAhead;
+    const rawAheadY = self.baseY + desired.vy * lookAhead;
+    const predicted = clampPosition({ ...self, x: rawAheadX, baseY: rawAheadY }, area);
+
+    // 邊界也要算成「威脅」，而且必須用**沒有 clamp 過**的預測點來判斷。
+    //
+    // 原本是先 clamp 再檢查：可行走區是凸的，從區內一點到另一個區內點的直線
+    // 永遠在區內，所以邊界永遠不可能讓 threatened 成立——整組閃避扇形對邊界
+    // 根本不會被評估。實測角色就這樣全速直直撞上右邊界然後急停：
+    // 1800 幀裡有 1456 幀貼在 x=maxX 回報 stalled，而上下兩個方向都是通的。
+    // 規格要的是「接近邊界時提前轉向」。
+    const clampedAway = Math.hypot(predicted.x - rawAheadX, predicted.baseY - rawAheadY);
+    const nearBoundary = clampedAway > selfSpace.radiusX * BOUNDARY_TURN_FACTOR;
+    const threatened = nearBoundary
+      || !pathIsSafe(self, others, area, predicted.x, predicted.baseY);
     const threat = threatened ? threatDirection(self, others, area, predicted.x, predicted.baseY) : null;
 
     // 繞行要**認定一個絕對方向並走一段**，不能每一幀重算。
@@ -757,10 +857,14 @@
         options.push({ ...velocityAlong(heading.ux, heading.uy, heading.scale), ...heading });
       }
 
-      // 規格：「優先減速，其次改變方向」。減速排在轉向之前——但只有在
+      // 規格：「優先減速，其次改變方向」。減速排在**扇形轉向**之前——但只有在
       // 「減速真的解得開」時才算數：拿整個 look-ahead 區間去驗，而不是只驗
       // 這一幀那 0.33px 的一小步。只驗一小步的話，角色會用 0.2 倍速一路蹭到
       // 貼著障礙為止，那不是減速禮讓，那是慢動作撞牆。
+      //
+      // 注意順序上的例外：正在沿用的繞行方向排在減速之前。已經認定要繞過去
+      // 的角色中途改成減速，會回到原本那個「走兩步又換邊」的擺盪。這是對規格
+      // 字面順序的刻意偏離，寫在這裡而不是假裝沒有。
       const slow = velocityAlong(dirX, dirY, AVOID_SLOW_SCALE);
       const slowAhead = clampPosition({
         ...self,
@@ -829,6 +933,8 @@
           // 走不到下一個轉角，這條規劃好的路已經不通了（例如有角色走過來擋住），
           // 丟掉重新規劃，不要抱著一條走不了的路一直撞。
           path = null;
+        } else {
+          planAttempts = 0; // 真的有進展，重新計次
         }
         anchorDistance = now;
         progressElapsed = 0;
@@ -837,17 +943,20 @@
       // 卡住的時候先別急著回報——貪婪避讓走不通，不代表沒有路。
       // 用網格 BFS 找一條真的走得到的路，取一個中繼點先往那裡走。
       // 真的連 BFS 都找不到比現在更靠近目標的節點，才回報 stalled 讓整合層換目標。
-      if (stalled && !cannotMove) {
+      if (stalled && !cannotMove && planAttempts < PATH_MAX_ATTEMPTS) {
         const plan = planPath(self, others, area, self.targetX, self.targetY);
         if (plan) {
           path = plan;
           stalled = false;
+          planAttempts++;
         }
       }
 
-      // 選到閃避方向就記住它。沒在閃避（一路暢通）時不要馬上忘掉——威脅常常
-      // 只是短暫消失一兩幀，立刻清掉會讓角色在障礙的轉角處反覆換邊。
-      // 留 AVOID_COMMIT_SECONDS 的餘裕，過了才真的放掉。
+      // 選到閃避方向就記住它，並把計時補滿——沿用同一個方向時也一樣補滿，
+      // 所以 AVOID_COMMIT_SECONDS 實際上是「威脅解除之後還保留多久」，
+      // 不是「認定之後最多用多久」。
+      // 沒在閃避（一路暢通）時不要馬上忘掉：威脅常常只是短暫消失一兩幀，
+      // 立刻清掉會讓角色在障礙的轉角處反覆換邊。
       // 但判定卡住時要清掉：那個方向已經證明走不出去，繼續沿用只會繼續抖。
       const chosenAvoid = !stalled && finite(velocity.ux) && finite(velocity.uy);
       const keepPrevious = !stalled && !chosenAvoid && heading !== null && avoidHold > 0;
@@ -874,6 +983,7 @@
         progressAnchorDistance: anchorDistance,
         progressGoalX: anchorGoalX,
         progressGoalY: anchorGoalY,
+        planAttempts,
       };
     }
 
@@ -892,9 +1002,11 @@
     // 以下匯出給測試釘住規格明文要求的性質；正式流程不需要直接呼叫。
     recoveryGrid,
     planPath,
+    chooseReachableTarget,
     segmentSampleStep,
     EDGE_BAND_RADII,
     VERTICAL_SPEED_FACTOR,
+    AVOID_SLOW_SCALE,
     RECOVERY_MAX_NODES,
     NEIGHBOR_OFFSETS,
   };

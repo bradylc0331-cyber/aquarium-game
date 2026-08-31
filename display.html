@@ -273,7 +273,12 @@
       // 那一位會靜止到活動結束。
       const reached = Math.hypot(character.targetX - character.x, character.targetY - character.baseY) < 12;
       if (reached || character.stalled) {
-        const target = Movement.chooseSafeTarget(character, creatures, walkable);
+        // 回報卡住時要挑一個**走得到**的目標。只保證安全的話，河對岸的點會被
+        // 一選再選，角色朝著到不了的地方撞、卡住、再換一個對岸的點，原地打轉。
+        // 抵達目標時用便宜的那個就好，不必每次都跑一趟 BFS。
+        const target = character.stalled
+          ? Movement.chooseReachableTarget(character, creatures, walkable)
+          : Movement.chooseSafeTarget(character, creatures, walkable);
         character.targetX = target.targetX;
         character.targetY = target.targetY;
       }

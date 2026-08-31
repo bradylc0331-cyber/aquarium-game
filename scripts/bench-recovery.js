@@ -142,3 +142,16 @@ console.log('\n=== 繞路規劃（planPath）：只在偵測到卡住時才跑�
   }, 10);
   console.log(`  15 位同一幀全部規劃（理論上限）       ${fmt(all)}  (60fps 預算 16.7ms)`);
 }
+
+console.log('\n=== 挑可到達目標（chooseReachableTarget）：只在角色回報卡住時才跑 ===');
+{
+  const area = Movement.getWalkableArea(1920, 1080);
+  const size = Creature.collisionSize({ width: 220, height: 400 }, 1920, 1080);
+  const self = {
+    id: 'picker', x: 1450, baseY: 720, ...size,
+    targetX: 406, targetY: 895, cruiseSpeed: 55, vx: 0, vy: 0,
+  };
+  const one = timed(() => Movement.chooseReachableTarget(self, [self], area, Math.random), 20);
+  console.log(`  單次                                  ${fmt(one)}`);
+  console.log('  （與 planPath 共用同一趟 BFS，成本同級；抵達目標時走的是便宜的 chooseSafeTarget）');
+}

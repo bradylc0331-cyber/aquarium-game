@@ -259,6 +259,7 @@
       this.progressAnchorDistance = next.progressAnchorDistance;
       this.progressGoalX = next.progressGoalX;
       this.progressGoalY = next.progressGoalY;
+      this.planAttempts = next.planAttempts;
     }
 
     updateVisual(dt) {
