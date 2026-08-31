@@ -1,7 +1,33 @@
 # 交接：實機驗收（攝影機 + 印好的塗色紙）
 
+> ## 先確認你在對的地方
+>
+> | | |
+> |---|---|
+> | **儲存庫** | `bradylc0331-cyber/aquarium-game` |
+> | **分支** | `2-5d-character-motion` |
+> | **專案** | 聖經樂園——兒童塗色紙掃描互動投影 |
+>
+> ```
+> git clone https://github.com/bradylc0331-cyber/aquarium-game.git
+> cd aquarium-game
+> git checkout 2-5d-character-motion
+> ```
+>
+> **如果你現在所在的資料夾裡沒有這個檔案，你就是在錯的儲存庫，請停下來。**
+> 不要去猜「最接近的檔案」——別的專案裡也有叫 HANDOFF 的文件，那些跟這件事無關。
+> 也不要開始改任何程式碼。先跟使用者確認路徑。
+>
+> 對的地方長這樣（三個都要對得上）：
+>
+> ```
+> git remote -v          # 要看到 aquarium-game
+> git branch --show-current   # 要看到 2-5d-character-motion
+> ls display.html control.html src/movement.js   # 三個都要在
+> ```
+
 **寫給誰：** 在 Brady 的 Mac mini 上開的**本機** Claude Code session。
-**寫於：** 2026-08-31，分支 `2-5d-character-motion`。
+**寫於：** 2026-08-31。
 
 **為什麼需要你：** 前面所有開發都在雲端容器裡做，那裡**碰不到攝影機、碰不到印表機**。
 自動測試涵蓋不到的正好就是這三件事：真實鏡頭、真實紙張、真實光線。這一關只能在
