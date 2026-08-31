@@ -178,11 +178,61 @@
     },
   ];
 
+  // 紙偶的手臂關節資料。座標是相對於角色圖片的比例（0~1），所以掃描出來的原稿
+  // 不論實際像素大小都對得上。pivotX/pivotY 是旋轉支點在該手臂切片內的相對位置
+  // ——肩膀，不是切片中心；繞肩膀轉手臂才不會整條手臂平移錯位。
+  //
+  // 這是**只影響畫面演出**的中繼資料：不改 shapes，所以列印線稿與掃描遮罩完全不變。
+  const PUPPET_RIGS = {
+    noah: {
+      gesture: 'wave',
+      leftArm: { x: 0.24, y: 0.36, width: 0.22, height: 0.36, pivotX: 0.78, pivotY: 0.12 },
+      rightArm: { x: 0.55, y: 0.36, width: 0.22, height: 0.36, pivotX: 0.22, pivotY: 0.12 },
+    },
+    moses: {
+      gesture: 'wave',
+      leftArm: { x: 0.26, y: 0.36, width: 0.20, height: 0.34, pivotX: 0.78, pivotY: 0.12 },
+      rightArm: { x: 0.56, y: 0.36, width: 0.20, height: 0.34, pivotX: 0.22, pivotY: 0.12 },
+    },
+    david: {
+      gesture: 'wave',
+      leftArm: { x: 0.27, y: 0.36, width: 0.19, height: 0.34, pivotX: 0.78, pivotY: 0.12 },
+      rightArm: { x: 0.56, y: 0.36, width: 0.20, height: 0.34, pivotX: 0.22, pivotY: 0.12 },
+    },
+    daniel: {
+      gesture: 'raise-hands',
+      leftArm: { x: 0.25, y: 0.36, width: 0.21, height: 0.36, pivotX: 0.78, pivotY: 0.12 },
+      rightArm: { x: 0.55, y: 0.36, width: 0.21, height: 0.36, pivotX: 0.22, pivotY: 0.12 },
+    },
+    jonah: {
+      gesture: 'wave',
+      leftArm: { x: 0.25, y: 0.36, width: 0.21, height: 0.35, pivotX: 0.78, pivotY: 0.12 },
+      rightArm: { x: 0.55, y: 0.36, width: 0.21, height: 0.35, pivotX: 0.22, pivotY: 0.12 },
+    },
+    shepherd: {
+      gesture: 'wave',
+      leftArm: { x: 0.23, y: 0.36, width: 0.21, height: 0.36, pivotX: 0.78, pivotY: 0.12 },
+      rightArm: { x: 0.53, y: 0.36, width: 0.21, height: 0.36, pivotX: 0.22, pivotY: 0.12 },
+    },
+    angel: {
+      gesture: 'raise-hands',
+      leftArm: { x: 0.20, y: 0.34, width: 0.27, height: 0.34, pivotX: 0.82, pivotY: 0.18 },
+      rightArm: { x: 0.53, y: 0.34, width: 0.27, height: 0.34, pivotX: 0.18, pivotY: 0.18 },
+    },
+  };
+
+  for (const species of SPECIES) {
+    const puppet = PUPPET_RIGS[species.id];
+    if (!puppet) continue;
+    species.swim.gesture = puppet.gesture;
+    species.swim.rig = { ...(species.swim.rig || {}), leftArm: puppet.leftArm, rightArm: puppet.rightArm };
+  }
+
   function getSpecies(id) {
     return SPECIES.find((s) => s.id === id) || null;
   }
 
-  const api = { SPECIES, getSpecies };
+  const api = { SPECIES, getSpecies, PUPPET_RIGS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Species = api;
 })(typeof window !== 'undefined' ? window : globalThis);

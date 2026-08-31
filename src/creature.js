@@ -62,6 +62,73 @@
     }
   }
 
+  // ---- 2.5D 紙偶：純函式區（可在 Node 測，不碰 canvas） ----
+
+  // 地面角色的走路擺動。關鍵是 footYOffset 恆為 0——規格要求雙腳貼地，
+  // 走路靠的是腿部關節旋轉（見 walkPose），不是整張紙上下抖。
+  // 身體只允許極小幅度的重心傾斜與轉身時的水平壓縮。
+  function groundedMotionOffset(t, params) {
+    const step = Math.sin(params.freq * t + (params.phase || 0));
+    return {
+      footYOffset: 0,
+      rotation: 0.012 * step,
+      turnScaleX: 0.94 + 0.06 * Math.abs(step),
+    };
+  }
+
+  // 依裁切後的可見人物比例換算顯示尺寸。以「高度」為基準，所以直式與橫式原稿
+  // 都會落在同一個可辨識的高度範圍，不會因為原稿比例而忽大忽小。
+  function displaySize(image, canvasWidth, canvasHeight, depthScale) {
+    const targetHeight = Math.max(
+      canvasHeight * 0.24,
+      Math.min(canvasHeight * 0.34, canvasWidth * 0.19),
+    );
+    const height = Math.round(targetHeight * depthScale * 2) / 2;
+    return { width: Math.round(height * image.width / image.height), height };
+  }
+
+  // 腳底越靠近畫面下方＝離觀眾越近＝畫得越大。夾在 [0,1] 之間，
+  // 超出可行走區的值不外插，避免角色瞬間爆大或縮成一點。
+  function depthScaleForY(baseY, top, bottom) {
+    const portion = Math.max(0, Math.min(1, (baseY - top) / (bottom - top || 1)));
+    return Math.round((0.78 + portion * 0.27) * 100) / 100;
+  }
+
+  function transitionOpacity(state, elapsed, seconds = 0.4) {
+    const portion = Math.max(0, Math.min(1, elapsed / seconds));
+    if (state === 'entering') return portion;
+    if (state === 'exiting') return 1 - portion;
+    return 1;
+  }
+
+  // 手勢只回傳「肢體角度」，永遠不回傳腳底位移——手勢不該把角色抬離地面。
+  function gesturePose(kind, elapsed) {
+    if (kind === 'raise-hands') {
+      return { leftArmAngle: -0.55, rightArmAngle: 0.55, footYOffset: 0 };
+    }
+    if (kind === 'wave') {
+      const wave = Math.sin(elapsed * Math.PI * 6);
+      return { leftArmAngle: 0, rightArmAngle: -0.45 + wave * 0.18, footYOffset: 0 };
+    }
+    return { leftArmAngle: 0, rightArmAngle: 0, footYOffset: 0 };
+  }
+
+  // 規格：角色下方只顯示人物名稱，不顯示動作名稱。這個函式只吃 name，
+  // 沒有第二個文字參數可以傳，動作文字從介面上就不可能被接上去。
+  function drawCharacterName(ctx, name, x, y, fontSize, opacity) {
+    ctx.save();
+    ctx.globalAlpha = opacity;
+    ctx.font = `600 ${fontSize}px -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.88)';
+    ctx.fillStyle = '#5d3d21';
+    ctx.strokeText(name, x, y);
+    ctx.fillText(name, x, y);
+    ctx.restore();
+  }
+
   function randRange([min, max]) {
     return min + Math.random() * (max - min);
   }
@@ -83,11 +150,13 @@
   }
 
   class Creature {
-    constructor({ image, species, canvasWidth, canvasHeight }) {
+    constructor({ artworkId, image, species, canvasWidth, canvasHeight, spawn, isDemo = false }) {
+      this.artworkId = artworkId;
       this.image = image;
       this.species = species;
       this.canvasWidth = canvasWidth;
       this.canvasHeight = canvasHeight;
+      this.isDemo = isDemo;
 
       const swim = species.swim;
       this.style = swim.style;
@@ -98,28 +167,91 @@
       this.sizeScale = swim.sizeScale || 1;
 
       this.isGrounded = this.style === 'walk' || swim.grounded === true;
-      // 走路人物只出現在草坡／道路所在的下半部；遠處人物較小，形成自然景深。
-      const depthBand = this.isGrounded
-        ? 0.70 + Math.random() * 0.17
-        : 0.25 + Math.random() * 0.6;
-      this.baseY = depthBand * canvasHeight;
-      this.depthScale = this.isGrounded
-        ? 0.72 + ((depthBand - 0.70) / 0.17) * 0.34
-        : 0.6 + depthBand * 0.6;
+      this.groundTop = canvasHeight * 0.45;
+      this.groundBottom = canvasHeight * 0.91;
 
-      const aspect = image.height / image.width;
-      const baseWidth = Math.max(78, Math.min(132, canvasHeight * 0.115));
-      this.width = baseWidth * this.sizeScale * this.depthScale;
-      this.height = this.width * aspect;
+      if (spawn) {
+        this.x = spawn.x;
+        this.baseY = spawn.baseY;
+      } else {
+        // 尚未接上移動控制器時（Task 6 之前）的後備：自行落在可行走帶內，
+        // 讓頁面在整合完成前仍然跑得起來。
+        const depthBand = this.isGrounded ? 0.70 + Math.random() * 0.17 : 0.25 + Math.random() * 0.6;
+        this.baseY = depthBand * canvasHeight;
+        this.x = Math.random() * canvasWidth;
+      }
 
-      this.x = Math.random() * canvasWidth;
+      this.targetX = this.x;
+      this.targetY = this.baseY;
+      this.vx = 0;
+      this.vy = 0;
+      this.cruiseSpeed = (swim.speed[0] + swim.speed[1]) / 2;
+
+      this.state = 'entering';
+      this.stateElapsed = 0;
+      this.opacity = 0;
+      // 每位新角色先打一次招呼，之後才進入低頻率的偶發動作循環。
+      this.currentGesture = swim.gesture || null;
+      this.gestureElapsed = 0;
+      this.nextGestureAt = 8 + Math.random() * 12;
+
+      this.refreshSize();
+    }
+
+    refreshSize() {
+      const scale = this.isGrounded
+        ? depthScaleForY(this.baseY, this.groundTop, this.groundBottom)
+        : 1;
+      const size = displaySize(this.image, this.canvasWidth, this.canvasHeight, scale);
+      this.width = size.width;
+      this.height = size.height;
+    }
+
+    setTransition(state) {
+      this.state = state;
+      this.stateElapsed = 0;
+    }
+
+    // 由移動控制器（Movement.steerCharacter）餵進來的地面座標。
+    // 這裡只接收結果，不自己決定方向——避免動畫與位移各算各的而互相拉扯。
+    setMovement(next) {
+      this.x = next.x;
+      this.baseY = next.baseY;
+      this.vx = next.vx;
+      this.vy = next.vy;
+    }
+
+    updateVisual(dt) {
+      this.stateElapsed += dt;
+      this.opacity = transitionOpacity(this.state, this.stateElapsed);
+      if (this.state === 'entering' && this.stateElapsed >= 0.4) this.state = 'active';
+
+      this.refreshSize();
+
+      this.gestureElapsed += dt;
+      if (this.currentGesture && this.gestureElapsed >= 1.2) {
+        this.currentGesture = null;
+        this.gestureElapsed = 0;
+        this.nextGestureAt = 8 + Math.random() * 12;
+      } else if (!this.currentGesture) {
+        this.nextGestureAt -= dt;
+        if (this.nextGestureAt <= 0) {
+          this.currentGesture = this.species.swim.gesture || null;
+          this.gestureElapsed = 0;
+        }
+      }
     }
 
     update(dt, t) {
-      this.x += this.speed * dt;
-      const margin = this.width;
-      if (this.speed > 0 && this.x - margin > this.canvasWidth) this.x = -margin;
-      if (this.speed < 0 && this.x + margin < 0) this.x = this.canvasWidth + margin;
+      // Task 6 接上 Movement 之前的後備水平漫遊。接上之後由 setMovement 覆寫位置，
+      // 這裡就只剩動畫狀態要推進。
+      if (!this.drivenByMovement) {
+        this.x += this.speed * dt;
+        const margin = this.width;
+        if (this.speed > 0 && this.x - margin > this.canvasWidth) this.x = -margin;
+        if (this.speed < 0 && this.x + margin < 0) this.x = this.canvasWidth + margin;
+      }
+      this.updateVisual(dt);
     }
 
     drawWalkingImage(ctx, t) {
@@ -167,17 +299,51 @@
       }
     }
 
-    draw(ctx, t) {
-      const off = motionOffset(this.style, t, { amplitude: this.amplitude, freq: this.freq, phase: this.phase });
-      // grounded 人物的 baseY 是腳底位置；其他角色仍以圖片中心為定位點。
-      const y = this.isGrounded
-        ? this.baseY - this.height / 2 + off.yOffset
-        : this.baseY + off.yOffset;
-      const facingRight = this.speed > 0;
+    // 手臂：繞肩膀（rig 的 pivot）旋轉一塊切片。角度來自 gesturePose，
+    // 腳底完全不受影響。
+    drawArm(ctx, arm, angle) {
+      if (!arm || !angle) return;
+      const image = this.image;
+      const iw = image.width;
+      const ih = image.height;
+      const dx = -this.width / 2;
+      const dy = -this.height / 2;
+      const xScale = this.width / iw;
+      const yScale = this.height / ih;
 
-      if (this.isGrounded) {
+      const sx = arm.x * iw;
+      const sy = arm.y * ih;
+      const sw = arm.width * iw;
+      const sh = arm.height * ih;
+      const pivotX = dx + (sx + sw * arm.pivotX) * xScale;
+      const pivotY = dy + (sy + sh * arm.pivotY) * yScale;
+
+      ctx.save();
+      ctx.translate(pivotX, pivotY);
+      ctx.rotate(angle);
+      ctx.translate(-pivotX, -pivotY);
+      drawImagePart(ctx, image, sx, sy, sw, sh,
+        dx + sx * xScale, dy + sy * yScale, sw * xScale, sh * yScale);
+      ctx.restore();
+    }
+
+    draw(ctx, t) {
+      const grounded = this.isGrounded;
+      const off = grounded
+        ? groundedMotionOffset(t, { freq: this.freq, phase: this.phase })
+        : motionOffset(this.style, t, { amplitude: this.amplitude, freq: this.freq, phase: this.phase });
+
+      // 地面角色：baseY 就是腳底，且 footYOffset 恆為 0——走路與手勢都不讓腳離地。
+      const y = grounded
+        ? this.baseY - this.height / 2 + off.footYOffset
+        : this.baseY + off.yOffset;
+      const facingRight = this.vx !== 0 ? this.vx > 0 : this.speed > 0;
+      const opacity = this.opacity == null ? 1 : this.opacity;
+      if (opacity <= 0) return;
+
+      if (grounded) {
         ctx.save();
-        ctx.globalAlpha = 0.2;
+        ctx.globalAlpha = 0.2 * opacity;
         ctx.fillStyle = '#4c351d';
         ctx.beginPath();
         ctx.ellipse(this.x, this.baseY + 2, this.width * 0.3, Math.max(3, this.width * 0.055), 0, 0, Math.PI * 2);
@@ -185,18 +351,53 @@
         ctx.restore();
       }
 
+      const pose = gesturePose(this.currentGesture, this.gestureElapsed);
+      const rig = this.species.swim.rig || {};
+
       ctx.save();
+      ctx.globalAlpha = opacity;
       ctx.translate(this.x, y);
       ctx.rotate(off.rotation * (facingRight ? 1 : -1));
       const flip = this.species.swim.noFlip ? 1 : (facingRight ? 1 : -1);
-      ctx.scale(flip * off.scaleX, off.scaleY);
-      if (this.style === 'walk') this.drawWalkingImage(ctx, t);
-      else ctx.drawImage(this.image, -this.width / 2, -this.height / 2, this.width, this.height);
+      const scaleX = grounded ? off.turnScaleX : off.scaleX;
+      const scaleY = grounded ? 1 : off.scaleY;
+      ctx.scale(flip * scaleX, scaleY);
+
+      // 紙張厚度：兩層低透明度的偏移副本墊在底下，做出紙偶的邊緣層次。
+      ctx.save();
+      ctx.globalAlpha = 0.18 * opacity;
+      for (const offset of [3, 1.5]) {
+        ctx.drawImage(this.image, -this.width / 2 + offset, -this.height / 2 + offset,
+          this.width, this.height);
+      }
       ctx.restore();
+
+      if (grounded) this.drawWalkingImage(ctx, t);
+      else ctx.drawImage(this.image, -this.width / 2, -this.height / 2, this.width, this.height);
+
+      this.drawArm(ctx, rig.leftArm, pose.leftArmAngle);
+      this.drawArm(ctx, rig.rightArm, pose.rightArmAngle);
+      ctx.restore();
+
+      // 規格：角色下方只顯示人物名稱，不顯示動作文字。
+      // 地面角色的 baseY 就是腳底；漂浮角色（天使）以圖片中心定位，名字要再往下挪半個身高。
+      const labelY = grounded ? this.baseY + 10 : y + this.height / 2 + 10;
+      drawCharacterName(ctx, this.species.name, this.x, labelY,
+        Math.max(16, this.width * 0.12), opacity);
     }
   }
 
-  const api = { Creature, motionOffset, walkPose };
+  const api = {
+    Creature,
+    motionOffset,
+    walkPose,
+    groundedMotionOffset,
+    displaySize,
+    depthScaleForY,
+    transitionOpacity,
+    gesturePose,
+    drawCharacterName,
+  };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CreatureModule = api;
 })(typeof window !== 'undefined' ? window : globalThis);
