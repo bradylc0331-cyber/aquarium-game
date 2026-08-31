@@ -48,6 +48,7 @@
   resize();
 
   const bubbles = AquariumScene.createBubbles(canvas.width, canvas.height, 40);
+  const flock = Array.from({ length: 4 }, () => AquariumScene.createSheep(canvas.width, canvas.height));
   const creatures = [];
   const MAX_CREATURES = 40; // 活動跑一整個下午，超過上限就淘汰最舊的人物，避免無限長
 
@@ -158,13 +159,25 @@
     elapsed += dt;
 
     AquariumScene.updateBubbles(bubbles, dt, canvas.width, canvas.height);
+    for (const sheep of flock) {
+      // 羊要同時避開角色與其他羊，否則整群會慢慢疊在一起變成一坨白影
+      const blockers = [...creatures, ...flock.filter((other) => other !== sheep)];
+      AquariumScene.updateSheep(sheep, dt, canvas.width, canvas.height, blockers);
+    }
 
     AquariumScene.drawBackground(ctx, canvas.width, canvas.height, elapsed);
+    AquariumScene.drawCanopySway(ctx, canvas.width, canvas.height, elapsed);
     AquariumScene.drawBubbles(ctx, bubbles);
 
-    for (const c of creatures) {
-      c.update(dt, elapsed);
-      c.draw(ctx, elapsed);
+    // 羊與角色一起依腳底深度排序，較靠近畫面下方的畫在前面，形成自然的 2.5D 景深。
+    const grounded = [...creatures, ...flock].sort((a, b) => a.baseY - b.baseY);
+    for (const item of grounded) {
+      if (item.mode) {
+        AquariumScene.drawSheep(ctx, item, elapsed, canvas.height);
+      } else {
+        item.update(dt, elapsed);
+        item.draw(ctx, elapsed);
+      }
     }
 
     AquariumScene.drawForeground(ctx, canvas.width, canvas.height, elapsed);
