@@ -1,5 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const {
   createBubbles,
   updateBubbles,
@@ -525,6 +527,7 @@ test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
   assert.equal(new Set(fish.map((item) => item.speed)).size, 4);
   assert.equal(new Set(fish.map((item) => item.phase)).size, 4);
   assert.ok(fish.every((item) => item.direction === 1 || item.direction === -1));
+  assert.deepEqual(fish.map((item) => item.opacity), [0.32, 0.36, 0.40, 0.44]);
 });
 
 test('河道曲線的多個正規化點都落在河面範圍', () => {
@@ -592,4 +595,72 @@ test('河流小魚素材 getter 拋錯時安全略過且不繪製', () => {
 
   assert.doesNotThrow(() => drawRiverFish(ctx, fish, 1280, 720, 3, images));
   assert.equal(calls.length, 0);
+});
+
+test('河流小魚在 resize 後仍用 coverPoint 對齊同一條河道', () => {
+  const fish = createRiverFish();
+  fish.forEach((item) => { item.phase = 0; });
+  const image = { id: 'river-fish' };
+  const first = makeFakeCtx();
+  const second = makeFakeCtx();
+
+  drawRiverFish(first.ctx, fish, 1280, 720, 0, { riverFish: image });
+  drawRiverFish(second.ctx, fish, 1920, 1080, 0, { riverFish: image });
+
+  const translatedAt = (calls, w, h) => calls.filter(([name]) => name === 'translate').map(([, [x, y]], index) => {
+    const { nx, ny } = riverPoint(fish[index].progress);
+    const iw = 1672;
+    const ih = 941;
+    const scale = Math.max(w / iw, h / ih);
+    return { x, y, expectedX: (w - iw * scale) / 2 + nx * iw * scale, expectedY: (h - ih * scale) / 2 + ny * ih * scale };
+  });
+
+  for (const point of [...translatedAt(first.calls, 1280, 720), ...translatedAt(second.calls, 1920, 1080)]) {
+    assert.ok(Math.abs(point.x - point.expectedX) < 1e-9);
+    assert.ok(Math.abs(point.y - point.expectedY) < 1e-9);
+  }
+});
+
+test('河流魚 Image 2 素材存在、非空且是有效 PNG', () => {
+  const asset = fs.readFileSync(path.join(__dirname, '..', 'assets', 'fish', 'river-fish-swimming.png'));
+
+  assert.ok(asset.length > 24);
+  assert.equal(asset.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+  assert.equal(asset.subarray(12, 16).toString('ascii'), 'IHDR');
+  assert.ok(asset.readUInt32BE(16) > 0);
+  assert.ok(asset.readUInt32BE(20) > 0);
+});
+
+test('河流小魚繪製各有一個淡漣漪，且缺失或失敗的漣漪 API 不會破壞 frame', () => {
+  const fish = createRiverFish();
+  const image = { id: 'river-fish' };
+  const complete = makeFakeCtx();
+
+  drawRiverFish(complete.ctx, fish, 1280, 720, 2, { riverFish: image });
+  for (const method of ['drawImage', 'ellipse', 'stroke']) {
+    assert.equal(complete.calls.filter(([name]) => name === method).length, 4, `${method} 必須每隻各一次`);
+  }
+  assert.equal(complete.calls.filter(([name]) => name === 'save').length, 4);
+  assert.equal(complete.calls.filter(([name]) => name === 'restore').length, 4);
+
+  const limitedCalls = [];
+  const noRippleCtx = {
+    save() { limitedCalls.push('save'); }, restore() { limitedCalls.push('restore'); },
+    translate() {}, scale() {}, drawImage() {},
+  };
+  assert.doesNotThrow(() => drawRiverFish(noRippleCtx, fish, 1280, 720, 2, { riverFish: image }));
+  assert.equal(limitedCalls.filter((name) => name === 'save').length, limitedCalls.filter((name) => name === 'restore').length);
+
+  const throwingRippleCalls = [];
+  const throwingRippleCtx = new Proxy({
+    save() { throwingRippleCalls.push('save'); }, restore() { throwingRippleCalls.push('restore'); },
+    translate() {}, scale() {}, drawImage() {}, beginPath() {}, stroke() {},
+  }, {
+    get(target, property) {
+      if (property === 'ellipse') throw new Error('ellipse unavailable');
+      return target[property];
+    },
+  });
+  assert.doesNotThrow(() => drawRiverFish(throwingRippleCtx, fish, 1280, 720, 2, { riverFish: image }));
+  assert.equal(throwingRippleCalls.filter((name) => name === 'save').length, throwingRippleCalls.filter((name) => name === 'restore').length);
 });

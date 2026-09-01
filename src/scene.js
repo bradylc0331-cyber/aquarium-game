@@ -192,10 +192,10 @@
   }
 
   const RIVER_FISH_LAYOUT = [
-    [0.07, 0.018, 1, 0.2, 18, 9, 0.22],
-    [0.31, 0.023, -1, 1.7, 20.6, 10.3, 0.255],
-    [0.58, 0.015, 1, 3.4, 23.2, 11.5, 0.29],
-    [0.84, 0.021, -1, 5.1, 25.8, 12.3, 0.325],
+    [0.07, 0.018, 1, 0.2, 18, 9, 0.32],
+    [0.31, 0.023, -1, 1.7, 20.6, 10.3, 0.36],
+    [0.58, 0.015, 1, 3.4, 23.2, 11.5, 0.40],
+    [0.84, 0.021, -1, 5.1, 25.8, 12.3, 0.44],
   ];
 
   function createRiverFish() {
@@ -246,12 +246,24 @@
         const drawnHeight = item.height * canvasScale;
         if (!Number.isFinite(drawnWidth) || !Number.isFinite(drawnHeight) || drawnWidth <= 0 || drawnHeight <= 0) continue;
 
+        const opacity = Math.max(0, Math.min(1, item.opacity));
         ctx.save();
         saved = true;
-        ctx.globalAlpha = Math.max(0, Math.min(1, item.opacity));
+        ctx.globalAlpha = opacity;
         ctx.translate(x, y + Math.sin(time * 1.8 + item.phase) * 1.6 * canvasScale);
         if (item.direction < 0) ctx.scale(-1, 1);
         ctx.drawImage(image, -drawnWidth / 2, -drawnHeight / 2, drawnWidth, drawnHeight);
+
+        // Sprite 預設朝右，尾端放在 local 左側；鏡像後仍會留在游動方向的後方。
+        if (typeof ctx.beginPath === 'function' && typeof ctx.ellipse === 'function' && typeof ctx.stroke === 'function') {
+          const ripplePulse = 0.12 + (Math.sin(time * 2.4 + item.phase) + 1) * 0.03;
+          ctx.globalAlpha = opacity * ripplePulse;
+          ctx.strokeStyle = '#fff0c8';
+          ctx.lineWidth = 0.7 * canvasScale;
+          ctx.beginPath();
+          ctx.ellipse(-drawnWidth * 0.43, drawnHeight * 0.10, drawnWidth * 0.19, drawnHeight * 0.17, 0, 0, Math.PI * 2);
+          ctx.stroke();
+        }
       } catch (_) {
         // 單一素材或 canvas 操作失敗時，其他魚仍可繼續繪製。
       } finally {
