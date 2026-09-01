@@ -31,17 +31,12 @@
     if (!source || !Number.isFinite(sourceWidth) || !Number.isFinite(sourceHeight)
       || sourceWidth <= 0 || sourceHeight <= 0 || !Number.isFinite(maxWidth) || maxWidth < 1) return null;
 
-    let documentToUse = documentLike;
-    if (documentToUse === undefined) {
-      try {
-        documentToUse = typeof document === 'undefined' ? null : document;
-      } catch (_) {
-        return null;
-      }
-    }
-    if (!documentToUse || typeof documentToUse.createElement !== 'function') return null;
-
     try {
+      let documentToUse = documentLike;
+      if (documentToUse === undefined) {
+        documentToUse = typeof document === 'undefined' ? null : document;
+      }
+      if (!documentToUse || typeof documentToUse.createElement !== 'function') return null;
       const drawnWidth = Math.floor(Math.min(sourceWidth, maxWidth));
       const drawnHeight = Math.max(1, Math.round(drawnWidth * sourceHeight / sourceWidth));
       if (drawnWidth < 1 || !Number.isFinite(drawnHeight)) return null;

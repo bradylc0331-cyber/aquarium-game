@@ -402,6 +402,9 @@ test('runtime sprite rasterization 對不支援與拋例外的畫布回傳 null'
   assert.equal(rasterizeRuntimeSprite(null, 320, null), null);
   assert.equal(rasterizeRuntimeSprite(sourceWithThrowingWidth, 320, null), null);
   assert.equal(rasterizeRuntimeSprite(source, 320, null), null);
+  assert.equal(rasterizeRuntimeSprite(source, 320, {
+    get createElement() { throw new Error('factory getter unavailable'); },
+  }), null);
   assert.equal(rasterizeRuntimeSprite(source, 320, { createElement() { throw new Error('no canvas'); } }), null);
   assert.equal(rasterizeRuntimeSprite(source, 320, {
     createElement() {
