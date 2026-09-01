@@ -226,7 +226,7 @@
         const progressStep = item.speed * dt;
         const phaseStep = (0.8 + item.speed * 16) * dt;
         if (!Number.isFinite(progressStep) || !Number.isFinite(phaseStep)) continue;
-        item.progress = normalizeRiverFishProgress(item.progress + item.direction * (progressStep % 1));
+        item.progress = normalizeRiverFishProgress(item.progress + item.direction * progressStep);
         item.phase = normalizedProgress((item.phase / (Math.PI * 2)) + phaseStep / (Math.PI * 2)) * Math.PI * 2;
       } catch (_) {
         // 壞掉的外部狀態不能中斷同一幀其他魚的更新。

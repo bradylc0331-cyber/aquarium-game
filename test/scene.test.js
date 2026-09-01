@@ -576,6 +576,22 @@ test('河流小魚長時間更新後仍保持有限狀態並貼著河道', () =>
   }
 });
 
+test('河流小魚大步長更新以 0.30 下游河段包回，而不是以 1.0 包回', () => {
+  const forward = createRiverFish()[0];
+  forward.progress = 0.79;
+  forward.speed = 1;
+  forward.direction = 1;
+  updateRiverFish([forward], 1);
+  assert.ok(Math.abs(forward.progress - 0.59) < 1e-12);
+
+  const reverse = createRiverFish()[1];
+  reverse.progress = 0.51;
+  reverse.speed = 1;
+  reverse.direction = -1;
+  updateRiverFish([reverse], 1);
+  assert.ok(Math.abs(reverse.progress - 0.71) < 1e-12);
+});
+
 test('河流小魚進度會包回下游水面，繪製也不接受上游或河岸進度', () => {
   assert.equal(normalizeRiverFishProgress(0.50), 0.50);
   assert.ok(normalizeRiverFishProgress(0.80) >= 0.50 && normalizeRiverFishProgress(0.80) < 0.80);
@@ -601,6 +617,28 @@ test('河流小魚進度會包回下游水面，繪製也不接受上游或河�
     const expectedY = (720 - 941 * scale) / 2 + ny * 941 * scale;
     assert.ok(Math.abs(translates[i][1] - expectedY) < 1e-9);
     assert.ok(ny >= 0.6275 && ny < 0.701);
+  }
+});
+
+test('河流小魚繪製前會獨立把注入的上游進度包回下游水面', () => {
+  const fish = createRiverFish().slice(0, 2).map((item, index) => ({
+    ...item,
+    progress: index === 0 ? 0.05 : 0.95,
+    phase: 0,
+  }));
+  const { ctx, calls } = makeFakeCtx();
+  const image = { id: 'river-fish', width: 1024, height: 1024 };
+  drawRiverFish(ctx, fish, 1280, 720, 0, { riverFish: image });
+  const translates = calls.filter(([name]) => name === 'translate').map(([, args]) => args);
+  assert.equal(translates.length, fish.length);
+
+  const scale = Math.max(1280 / 1672, 720 / 941);
+  for (let i = 0; i < fish.length; i++) {
+    const progress = normalizeRiverFishProgress(fish[i].progress);
+    const { ny } = riverPoint(progress);
+    const expectedY = (720 - 941 * scale) / 2 + ny * 941 * scale;
+    assert.ok(ny >= 0.6275 && ny < 0.701);
+    assert.ok(Math.abs(translates[i][1] - expectedY) < 1e-9);
   }
 });
 
