@@ -14,6 +14,10 @@ const {
   rasterizeRuntimeSprite,
   drawSheep,
   drawBirdFlock,
+  riverPoint,
+  createRiverFish,
+  updateRiverFish,
+  drawRiverFish,
 } = require('../src/scene.js');
 
 // 用 Proxy 假裝一個 CanvasRenderingContext2D：任何方法呼叫都是 no-op，
@@ -511,4 +515,47 @@ test('動物偏好影格不可用時會退回另一個已載入的姿勢', () =>
 
   const sources = calls.filter(([name]) => name === 'drawImage').map(([, args]) => args[0]);
   assert.deepEqual(sources, [walking, birdUp]);
+});
+
+test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
+  const fish = createRiverFish();
+
+  assert.equal(fish.length, 4);
+  assert.equal(new Set(fish.map((item) => item.progress)).size, 4);
+  assert.equal(new Set(fish.map((item) => item.speed)).size, 4);
+  assert.equal(new Set(fish.map((item) => item.phase)).size, 4);
+  assert.ok(fish.every((item) => item.direction === 1 || item.direction === -1));
+});
+
+test('河道曲線的多個正規化點都落在河面範圍', () => {
+  for (const progress of [0, 0.08, 0.2, 0.35, 0.5, 0.7, 0.85, 1]) {
+    const { nx, ny } = riverPoint(progress);
+    assert.ok(nx >= 0.54 && nx <= 0.71, `progress=${progress} 的 nx=${nx}`);
+    assert.ok(ny >= 0.505 && ny <= 0.75, `progress=${progress} 的 ny=${ny}`);
+  }
+});
+
+test('河流小魚長時間更新後仍保持有限狀態並貼著河道', () => {
+  const fish = createRiverFish();
+
+  for (let frame = 0; frame < 5000; frame++) updateRiverFish(fish, 0.05);
+
+  for (const item of fish) {
+    assert.ok(Number.isFinite(item.progress) && item.progress >= 0 && item.progress < 1);
+    assert.ok(Number.isFinite(item.phase));
+    const { nx, ny } = riverPoint(item.progress);
+    assert.ok(nx >= 0.54 && nx <= 0.71);
+    assert.ok(ny >= 0.505 && ny <= 0.75);
+  }
+});
+
+test('河流小魚在缺素材、假的與受限 ctx 上繪製都安全', () => {
+  const fish = createRiverFish();
+  const { ctx } = makeFakeCtx();
+  const restrictedCtx = { save() {}, restore() {}, translate() {}, scale() {}, drawImage() { throw new Error('draw failed'); } };
+
+  assert.doesNotThrow(() => drawRiverFish(ctx, fish, 1280, 720, 1.2));
+  assert.doesNotThrow(() => drawRiverFish({}, fish, 1280, 720, 1.2, { riverFish: { id: 'river-fish' } }));
+  assert.doesNotThrow(() => drawRiverFish(ctx, fish, 1280, 720, 1.2, { riverFish: { id: 'river-fish' } }));
+  assert.doesNotThrow(() => drawRiverFish(restrictedCtx, fish, 1280, 720, 1.2, { riverFish: { id: 'river-fish' } }));
 });

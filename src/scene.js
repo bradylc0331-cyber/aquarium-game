@@ -17,6 +17,7 @@
     sheepGrazing: null,
     birdUp: null,
     birdDown: null,
+    riverFish: null,
   };
 
   function rasterizeRuntimeSprite(source, maxWidth, documentLike) {
@@ -83,6 +84,7 @@
     loadRuntimeAnimalImage('sheepGrazing', 'assets/sheep/sheep-grazing.png', 320);
     loadRuntimeAnimalImage('birdUp', 'assets/birds/bird-wings-up.png', 192);
     loadRuntimeAnimalImage('birdDown', 'assets/birds/bird-wings-down.png', 192);
+    loadRuntimeAnimalImage('riverFish', 'assets/fish/river-fish-swimming.png', 144);
   }
 
   loadAnimalImages();
@@ -152,6 +154,21 @@
     return [ox + nx * iw * scale, oy + ny * ih * scale];
   }
 
+  function normalizedProgress(progress) {
+    if (!Number.isFinite(progress)) return 0;
+    const normalized = progress % 1;
+    return normalized < 0 ? normalized + 1 : normalized;
+  }
+
+  // 河流上的所有動態元素共用這條原圖座標曲線，cover 裁切後仍能貼著河面。
+  function riverPoint(progress) {
+    const p = normalizedProgress(progress);
+    return {
+      nx: 0.555 + p * 0.135 + Math.sin(p * Math.PI * 2) * 0.012,
+      ny: 0.505 + p * 0.245,
+    };
+  }
+
   // 沿著背景原圖中央的河道畫短波光；位置使用原圖比例，cover 裁切時仍能貼著河面。
   function drawRiverFlow(ctx, w, h, t) {
     ctx.save();
@@ -160,9 +177,8 @@
     ctx.lineWidth = Math.max(1.2, h / 650);
     ctx.lineCap = 'round';
     for (let i = 0; i < 12; i++) {
-      const p = (i / 12 + t * 0.035) % 1;
-      const ny = 0.505 + p * 0.245;
-      const nx = 0.555 + p * 0.135 + Math.sin(p * Math.PI * 2) * 0.012;
+      const p = normalizedProgress(i / 12 + t * 0.035);
+      const { nx, ny } = riverPoint(p);
       const halfWidth = 0.006 + p * 0.022;
       const [x1, y1] = coverPoint(w, h, nx - halfWidth, ny);
       const [xm, ym] = coverPoint(w, h, nx, ny + 0.0025);
@@ -173,6 +189,74 @@
       ctx.stroke();
     }
     ctx.restore();
+  }
+
+  const RIVER_FISH_LAYOUT = [
+    [0.07, 0.018, 1, 0.2, 18, 9, 0.22],
+    [0.31, 0.023, -1, 1.7, 20.6, 10.3, 0.255],
+    [0.58, 0.015, 1, 3.4, 23.2, 11.5, 0.29],
+    [0.84, 0.021, -1, 5.1, 25.8, 12.3, 0.325],
+  ];
+
+  function createRiverFish() {
+    return RIVER_FISH_LAYOUT.map(([progress, speed, direction, phase, width, height, opacity]) => ({
+      progress, speed, direction, phase, width, height, opacity,
+    }));
+  }
+
+  function updateRiverFish(fish, dt) {
+    if (!Array.isArray(fish) || !Number.isFinite(dt)) return;
+    for (const item of fish) {
+      try {
+        if (!item || !Number.isFinite(item.progress) || !Number.isFinite(item.speed) || item.speed < 0
+          || !Number.isFinite(item.phase) || (item.direction !== 1 && item.direction !== -1)) continue;
+        const progressStep = item.speed * dt;
+        const phaseStep = (0.8 + item.speed * 16) * dt;
+        if (!Number.isFinite(progressStep) || !Number.isFinite(phaseStep)) continue;
+        item.progress = normalizedProgress(item.progress + item.direction * (progressStep % 1));
+        item.phase = normalizedProgress((item.phase / (Math.PI * 2)) + phaseStep / (Math.PI * 2)) * Math.PI * 2;
+      } catch (_) {
+        // 壞掉的外部狀態不能中斷同一幀其他魚的更新。
+      }
+    }
+  }
+
+  function drawRiverFish(ctx, fish, w, h, t, images = animalImages) {
+    if (!ctx || !Array.isArray(fish) || !images || !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0
+      || typeof ctx.save !== 'function' || typeof ctx.restore !== 'function' || typeof ctx.translate !== 'function'
+      || typeof ctx.scale !== 'function' || typeof ctx.drawImage !== 'function') return;
+
+    let image;
+    try { image = images.riverFish; } catch (_) { return; }
+    if (!image) return;
+
+    const canvasScale = h / 720;
+    const time = Number.isFinite(t) ? t : 0;
+    for (const item of fish) {
+      let saved = false;
+      try {
+        if (!item || !Number.isFinite(item.progress) || !Number.isFinite(item.phase) || !Number.isFinite(item.width)
+          || !Number.isFinite(item.height) || !Number.isFinite(item.opacity) || item.width <= 0 || item.height <= 0) continue;
+        const { nx, ny } = riverPoint(item.progress);
+        const [x, y] = coverPoint(w, h, nx, ny);
+        const drawnWidth = item.width * canvasScale;
+        const drawnHeight = item.height * canvasScale;
+        if (!Number.isFinite(drawnWidth) || !Number.isFinite(drawnHeight) || drawnWidth <= 0 || drawnHeight <= 0) continue;
+
+        ctx.save();
+        saved = true;
+        ctx.globalAlpha = Math.max(0, Math.min(1, item.opacity));
+        ctx.translate(x, y + Math.sin(time * 1.8 + item.phase) * 1.6 * canvasScale);
+        if (item.direction < 0) ctx.scale(-1, 1);
+        ctx.drawImage(image, -drawnWidth / 2, -drawnHeight / 2, drawnWidth, drawnHeight);
+      } catch (_) {
+        // 單一素材或 canvas 操作失敗時，其他魚仍可繼續繪製。
+      } finally {
+        if (saved) {
+          try { ctx.restore(); } catch (_) { /* nothing left to restore safely */ }
+        }
+      }
+    }
   }
 
   // 前景草葉以同一陣風相位緩慢左右擺動，疊在人物前方會更有景深。
@@ -476,6 +560,7 @@
 
   const api = {
     createBubbles, updateBubbles, drawBubbles, drawBackground, drawRiverFlow, drawForeground,
+    riverPoint, createRiverFish, updateRiverFish, drawRiverFish,
     gustStrength, drawCanopySway, createSheepFlock, sheepScaleForY, updateSheepFlock,
     createBirdFlock, updateBirdFlock, rasterizeRuntimeSprite, drawSheep, drawBirdFlock,
   };
