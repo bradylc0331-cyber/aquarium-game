@@ -539,6 +539,14 @@ test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
     return Number.isFinite(sx) && Number.isFinite(sy) && Number.isFinite(sw) && Number.isFinite(sh)
       && sx >= 0 && sy >= 0 && sw > 0 && sh > 0 && sx + sw <= image.width && sy + sh <= image.height;
   }));
+  assert.ok(draws.every((args) => {
+    const [, sx, sy, sw, sh] = args;
+    const epsilon = 1e-12;
+    return Math.abs(sx - image.width * 0.20) <= epsilon
+      && Math.abs(sy - image.height * 0.34) <= epsilon
+      && Math.abs(sw - image.width * 0.60) <= epsilon
+      && Math.abs(sh - image.height * 0.28) <= epsilon;
+  }), '每隻魚都必須使用核准的 sprite crop 比例');
   assert.deepEqual(fish.map((item) => item.opacity), [0.58, 0.62, 0.66, 0.70]);
   assert.equal(new Set(fish.map((item) => item.opacity)).size, 4);
   assert.ok(fish.every((item) => item.opacity >= 0.58 && item.opacity <= 0.70));
