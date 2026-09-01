@@ -559,3 +559,23 @@ test('河流小魚在缺素材、假的與受限 ctx 上繪製都安全', () => 
   assert.doesNotThrow(() => drawRiverFish(ctx, fish, 1280, 720, 1.2, { riverFish: { id: 'river-fish' } }));
   assert.doesNotThrow(() => drawRiverFish(restrictedCtx, fish, 1280, 720, 1.2, { riverFish: { id: 'river-fish' } }));
 });
+
+test('河流小魚的 ctx capability getter 拋錯時會安全略過', () => {
+  const fish = createRiverFish();
+  const throwingSave = new Proxy({}, {
+    get(_, property) {
+      if (property === 'save') throw new Error('save getter failed');
+      return () => {};
+    },
+  });
+  const throwingDrawImage = new Proxy({}, {
+    get(_, property) {
+      if (property === 'drawImage') throw new Error('drawImage getter failed');
+      return () => {};
+    },
+  });
+  const images = { riverFish: { id: 'river-fish' } };
+
+  assert.doesNotThrow(() => drawRiverFish(throwingSave, fish, 1280, 720, 1.2, images));
+  assert.doesNotThrow(() => drawRiverFish(throwingDrawImage, fish, 1280, 720, 1.2, images));
+});

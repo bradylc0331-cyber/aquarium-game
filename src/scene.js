@@ -222,12 +222,15 @@
   }
 
   function drawRiverFish(ctx, fish, w, h, t, images = animalImages) {
-    if (!ctx || !Array.isArray(fish) || !images || !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0
-      || typeof ctx.save !== 'function' || typeof ctx.restore !== 'function' || typeof ctx.translate !== 'function'
-      || typeof ctx.scale !== 'function' || typeof ctx.drawImage !== 'function') return;
-
     let image;
-    try { image = images.riverFish; } catch (_) { return; }
+    try {
+      if (!ctx || !Array.isArray(fish) || !images || !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0
+        || typeof ctx.save !== 'function' || typeof ctx.restore !== 'function' || typeof ctx.translate !== 'function'
+        || typeof ctx.scale !== 'function' || typeof ctx.drawImage !== 'function') return;
+      image = images.riverFish;
+    } catch (_) {
+      return;
+    }
     if (!image) return;
 
     const canvasScale = h / 720;
