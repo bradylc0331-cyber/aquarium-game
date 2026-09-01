@@ -605,7 +605,7 @@ test('河流小魚在 resize 後仍用 coverPoint 對齊同一條河道', () => 
   const second = makeFakeCtx();
 
   drawRiverFish(first.ctx, fish, 1280, 720, 0, { riverFish: image });
-  drawRiverFish(second.ctx, fish, 1920, 1080, 0, { riverFish: image });
+  drawRiverFish(second.ctx, fish, 720, 1280, 0, { riverFish: image });
 
   const translatedAt = (calls, w, h) => calls.filter(([name]) => name === 'translate').map(([, [x, y]], index) => {
     const { nx, ny } = riverPoint(fish[index].progress);
@@ -615,7 +615,13 @@ test('河流小魚在 resize 後仍用 coverPoint 對齊同一條河道', () => 
     return { x, y, expectedX: (w - iw * scale) / 2 + nx * iw * scale, expectedY: (h - ih * scale) / 2 + ny * ih * scale };
   });
 
-  for (const point of [...translatedAt(first.calls, 1280, 720), ...translatedAt(second.calls, 1920, 1080)]) {
+  const landscape = translatedAt(first.calls, 1280, 720);
+  const portrait = translatedAt(second.calls, 720, 1280);
+  assert.equal(landscape.length, fish.length);
+  assert.equal(portrait.length, fish.length);
+  assert.ok(1280 / 941 > 720 / 1672, 'portrait viewport 必須覆蓋高度主導的 cover 分支');
+
+  for (const point of [...landscape, ...portrait]) {
     assert.ok(Math.abs(point.x - point.expectedX) < 1e-9);
     assert.ok(Math.abs(point.y - point.expectedY) < 1e-9);
   }
