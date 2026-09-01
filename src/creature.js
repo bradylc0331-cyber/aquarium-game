@@ -137,7 +137,7 @@
 
   class Creature {
     constructor({
-      artworkId, image, species, canvasWidth, canvasHeight, spawn, isDemo = false,
+      artworkId, image, species, canvasWidth, canvasHeight, spawn,
       groundTop, groundBottom,
     }) {
       this.artworkId = artworkId;
@@ -145,7 +145,6 @@
       this.species = species;
       this.canvasWidth = canvasWidth;
       this.canvasHeight = canvasHeight;
-      this.isDemo = isDemo;
 
       const swim = species.swim;
       this.style = swim.style;

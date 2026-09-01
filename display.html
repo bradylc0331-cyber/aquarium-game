@@ -88,7 +88,6 @@
         canvasWidth: canvas.width,
         canvasHeight: canvas.height,
         spawn,
-        isDemo: work.isDemo === true,
         groundTop: walkable.top,
         groundBottom: walkable.bottom,
       });
@@ -119,90 +118,6 @@
     savedCount: () => store.loadAll().then((records) => records.length),
     savedIds: () => store.loadAll().then((records) => records.map((r) => r.artworkId)),
   };
-
-  // 開場先放入幾位暖色調的示範人物，真的掃描結果進來時一樣加進同一個陣列。
-  const DEMO_COLORS = {
-    noah: [184, 118, 82], moses: [194, 151, 92], david: [185, 96, 72],
-    daniel: [154, 116, 77], jonah: [105, 137, 123], shepherd: [202, 169, 111],
-    angel: [232, 211, 158],
-  };
-  const imageCache = new Map();
-
-  function loadImage(src) {
-    if (imageCache.has(src)) return imageCache.get(src);
-    const promise = new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve(image);
-      image.onerror = () => reject(new Error('讀取人物素材失敗：' + src));
-      image.src = src;
-    });
-    imageCache.set(src, promise);
-    return promise;
-  }
-
-  function textureFromImageData(imageData) {
-    const c = document.createElement('canvas');
-    c.width = imageData.width; c.height = imageData.height;
-    c.getContext('2d').putImageData(new ImageData(imageData.data, imageData.width, imageData.height), 0, 0);
-    return c;
-  }
-
-  async function makeDemoTexture(species) {
-    const [, , vw, vh] = species.viewBox.split(' ').map(Number);
-    let maskCanvas;
-    if (species.mask) {
-      const image = await loadImage(species.mask);
-      maskCanvas = document.createElement('canvas');
-      maskCanvas.width = vw;
-      maskCanvas.height = vh;
-      maskCanvas.getContext('2d').drawImage(image, 0, 0, vw, vh);
-    } else {
-      const maskSvg = SvgRaster.nativeMaskSVG(species);
-      maskCanvas = await SvgRaster.rasterizeSVGToCanvas(maskSvg, vw, vh);
-    }
-    const maskData = maskCanvas.getContext('2d').getImageData(0, 0, vw, vh);
-    const color = Extract.solidColorImageData(vw, vh, DEMO_COLORS[species.id] || [200, 200, 200]);
-    const merged = Extract.applyMaskToImageData(color, maskData);
-    if (species.art) {
-      const artImage = await loadImage(species.art);
-      const artCanvas = document.createElement('canvas');
-      artCanvas.width = vw;
-      artCanvas.height = vh;
-      artCanvas.getContext('2d').drawImage(artImage, 0, 0, vw, vh);
-      const art = artCanvas.getContext('2d').getImageData(0, 0, vw, vh).data;
-      for (let i = 0; i < merged.data.length; i += 4) {
-        const luma = (art[i] * 0.299) + (art[i + 1] * 0.587) + (art[i + 2] * 0.114);
-        if (luma < 205 && merged.data[i + 3] > 0) {
-          merged.data[i] = 42;
-          merged.data[i + 1] = 34;
-          merged.data[i + 2] = 28;
-        }
-      }
-    }
-    const box = Extract.boundingBoxOfAlpha(merged, 20);
-    if (!box) return null;
-    const cropped = Extract.cropImageData(merged, box, 4);
-    return textureFromImageData(cropped);
-  }
-
-  // 示範人物走同一個 manager，才會一起算進 15 位的 FIFO 名額。
-  // 只補到「還原完之後剩下的空位」為止——孩子的作品優先於示範人物，
-  // 塞滿再讓 FIFO 去擠的話，被擠掉的會是剛還原回來的真作品。
-  async function seedDemoCreatures(slots) {
-    for (const species of Species.SPECIES) {
-      if (slots <= 0) return;
-      const image = await makeDemoTexture(species);
-      if (!image) continue;
-      const result = manager.enqueue({
-        artworkId: `demo-${species.id}`,
-        speciesId: species.id,
-        image,
-        ts: 0,
-        isDemo: true,
-      });
-      if (result === 'accepted') slots--;
-    }
-  }
 
   // 存進 IndexedDB 的作品，重新整理之後還原。
   //
@@ -250,7 +165,6 @@
       restored = 0; // 還原失敗就當作全新的一場，不能讓畫面開不起來
     }
     if (restored > 0) showToast(`已找回 ${restored} 張作品`);
-    await seedDemoCreatures(manager.maxCharacters - restored);
     store.prune();
   })();
 
