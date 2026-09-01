@@ -307,6 +307,12 @@ git commit -m "feat: animate sheep grazing and birds flying"
 - Modify: `test/scene.test.js`
 - Modify: `test/speciesAssets.test.js`
 
+**Quality amendments from Task 1 review:**
+
+- Keep the four Image 2 PNGs as source masters, but never retain or draw their 1536×1024 decoded images every frame. Convert a successfully loaded master once to an in-memory Canvas runtime sprite capped at 320px wide for sheep or 192px wide for birds; then detach the original image event handlers and source reference.
+- The conversion helper must return `null` rather than throw when Canvas creation/context acquisition fails. Drawing must continue to use the other pose as fallback, or skip the species when both are unavailable.
+- The bird downstroke canvas has a measured alpha-centroid shift of about 4.9% of its source width relative to the wings-up canvas. Apply a pose-specific local horizontal drawing offset of `-0.049 * drawnWidth` to the downstroke frame before mirroring so flipbook animation does not visibly jump.
+
 - [ ] **Step 1: Add asset existence tests**
 
 Append to `test/speciesAssets.test.js`:
@@ -356,13 +362,33 @@ Expected: FAIL because `drawSheep` and `drawBirdFlock` are missing.
 
 - [ ] **Step 4: Add non-throwing asset loading in `src/scene.js`**
 
+First add a unit-testable `rasterizeRuntimeSprite(source, maxWidth, documentLike = document)` helper. With a fake source and fake document/context, assert it preserves aspect ratio, never exceeds its max width, issues exactly one `drawImage` call, and returns `null` instead of throwing when canvas/context support is unavailable. Add a second test proving a missing Image constructor leaves animal drawing as a no-op.
+
 ```js
 const animalImages = { sheepWalking: null, sheepGrazing: null, birdUp: null, birdDown: null };
+
+function rasterizeRuntimeSprite(source, maxWidth, documentLike = typeof document === 'undefined' ? null : document) {
+  if (!source || !documentLike || !Number.isFinite(source.width) || source.width <= 0
+    || !Number.isFinite(source.height) || source.height <= 0) return null;
+  const scale = Math.min(1, maxWidth / source.width);
+  const canvas = documentLike.createElement('canvas');
+  const context = canvas && canvas.getContext && canvas.getContext('2d');
+  if (!context) return null;
+  canvas.width = Math.max(1, Math.round(source.width * scale));
+  canvas.height = Math.max(1, Math.round(source.height * scale));
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
 
 function loadAnimalImage(key, src) {
   if (typeof Image === 'undefined') return;
   const image = new Image();
-  image.onload = () => { animalImages[key] = image; };
+  image.onload = () => {
+    animalImages[key] = rasterizeRuntimeSprite(image, key.startsWith('sheep') ? 320 : 192);
+    image.onload = null;
+    image.onerror = null;
+    image.src = '';
+  };
   image.onerror = () => { animalImages[key] = null; };
   image.src = src;
 }
@@ -372,6 +398,8 @@ loadAnimalImage('sheepGrazing', 'assets/sheep/sheep-grazing.png');
 loadAnimalImage('birdUp', 'assets/birds/bird-wings-up.png');
 loadAnimalImage('birdDown', 'assets/birds/bird-wings-down.png');
 ```
+
+Export `rasterizeRuntimeSprite` only if needed by the Node unit test; do not expose mutable `animalImages` state.
 
 - [ ] **Step 5: Add foot-anchored sheep drawing and phased bird drawing**
 
@@ -403,14 +431,17 @@ function drawBirdFlock(ctx, flock, t, canvasHeight) {
     const scale = canvasHeight / 900;
     const width = bird.width * scale;
     const height = bird.height * scale;
+    const frameOffsetX = wingUp ? 0 : -width * 0.049;
     ctx.save();
     ctx.translate(bird.x, bird.y);
     ctx.scale(bird.direction, 1);
-    ctx.drawImage(image, -width / 2, -height / 2, width, height);
+    ctx.drawImage(image, -width / 2 + frameOffsetX, -height / 2, width, height);
     ctx.restore();
   }
 }
 ```
+
+Add a fake-context assertion that alternately drawing wings-up and wings-down uses the measured local offset only for the downstroke. Browser verification must also show a rapid two-frame flipbook at actual 34×22–42×27 px without apparent whole-bird lateral jumping.
 
 Export `drawSheep` and `drawBirdFlock`.
 
