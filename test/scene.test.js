@@ -522,20 +522,26 @@ test('動物偏好影格不可用時會退回另一個已載入的姿勢', () =>
 test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
   const fish = createRiverFish();
   const { ctx, calls } = makeFakeCtx();
-  drawRiverFish(ctx, fish, 1280, 720, 0, { riverFish: { id: 'river-fish' } });
-  const dimensions = calls.filter(([name]) => name === 'drawImage').map(([, args]) => args.slice(3, 5));
+  const image = { id: 'river-fish', width: 1024, height: 1024 };
+  drawRiverFish(ctx, fish, 1280, 720, 0, { riverFish: image });
+  const draws = calls.filter(([name]) => name === 'drawImage').map(([, args]) => args);
+  const dimensions = draws.map((args) => args.slice(7, 9));
 
   assert.equal(fish.length, 4);
   assert.equal(new Set(fish.map((item) => item.progress)).size, 4);
   assert.equal(new Set(fish.map((item) => item.speed)).size, 4);
   assert.equal(new Set(fish.map((item) => item.phase)).size, 4);
   assert.ok(fish.every((item) => item.direction === 1 || item.direction === -1));
-  assert.deepEqual(dimensions, [[30, 15], [33, 16.5], [36, 18], [39, 19.5]]);
-  assert.ok(dimensions.every(([width, height]) => width >= 30 && width <= 40 && height > 0
-    && Math.abs(height / width - 0.5) < 1e-9));
-  assert.deepEqual(fish.map((item) => item.opacity), [0.30, 0.34, 0.38, 0.42]);
+  assert.deepEqual(dimensions, [[36, 18], [40, 20], [44, 22], [48, 24]]);
+  assert.ok(draws.every((args) => {
+    assert.equal(args.length, 9);
+    const [, sx, sy, sw, sh] = args;
+    return Number.isFinite(sx) && Number.isFinite(sy) && Number.isFinite(sw) && Number.isFinite(sh)
+      && sx >= 0 && sy >= 0 && sw > 0 && sh > 0 && sx + sw <= image.width && sy + sh <= image.height;
+  }));
+  assert.deepEqual(fish.map((item) => item.opacity), [0.58, 0.62, 0.66, 0.70]);
   assert.equal(new Set(fish.map((item) => item.opacity)).size, 4);
-  assert.ok(fish.every((item) => item.opacity >= 0.28 && item.opacity <= 0.45));
+  assert.ok(fish.every((item) => item.opacity >= 0.58 && item.opacity <= 0.70));
 });
 
 test('河道曲線的多個正規化點都落在河面範圍', () => {
@@ -563,12 +569,19 @@ test('河流小魚長時間更新後仍保持有限狀態並貼著河道', () =>
 test('河流小魚在缺素材、假的與受限 ctx 上繪製都安全', () => {
   const fish = createRiverFish();
   const { ctx } = makeFakeCtx();
+  const image = { id: 'river-fish', width: 1024, height: 1024 };
   const restrictedCtx = { save() {}, restore() {}, translate() {}, scale() {}, drawImage() { throw new Error('draw failed'); } };
 
   assert.doesNotThrow(() => drawRiverFish(ctx, fish, 1280, 720, 1.2));
-  assert.doesNotThrow(() => drawRiverFish({}, fish, 1280, 720, 1.2, { riverFish: { id: 'river-fish' } }));
-  assert.doesNotThrow(() => drawRiverFish(ctx, fish, 1280, 720, 1.2, { riverFish: { id: 'river-fish' } }));
-  assert.doesNotThrow(() => drawRiverFish(restrictedCtx, fish, 1280, 720, 1.2, { riverFish: { id: 'river-fish' } }));
+  assert.doesNotThrow(() => drawRiverFish({}, fish, 1280, 720, 1.2, { riverFish: image }));
+  assert.doesNotThrow(() => drawRiverFish(ctx, fish, 1280, 720, 1.2, { riverFish: image }));
+  assert.doesNotThrow(() => drawRiverFish(restrictedCtx, fish, 1280, 720, 1.2, { riverFish: image }));
+
+  const invalid = makeFakeCtx();
+  assert.doesNotThrow(() => drawRiverFish(invalid.ctx, fish, 1280, 720, 1.2, {
+    riverFish: { id: 'invalid-fish', width: 0, height: 1024 },
+  }));
+  assert.equal(invalid.calls.length, 0);
 });
 
 test('河流小魚的 ctx capability getter 拋錯時會安全略過', () => {
@@ -585,7 +598,7 @@ test('河流小魚的 ctx capability getter 拋錯時會安全略過', () => {
       return () => {};
     },
   });
-  const images = { riverFish: { id: 'river-fish' } };
+  const images = { riverFish: { id: 'river-fish', width: 1024, height: 1024 } };
 
   assert.doesNotThrow(() => drawRiverFish(throwingSave, fish, 1280, 720, 1.2, images));
   assert.doesNotThrow(() => drawRiverFish(throwingDrawImage, fish, 1280, 720, 1.2, images));
@@ -608,7 +621,7 @@ test('河流小魚素材 getter 拋錯時安全略過且不繪製', () => {
 test('河流小魚在 resize 後仍用 coverPoint 對齊同一條河道', () => {
   const fish = createRiverFish();
   fish.forEach((item) => { item.phase = 0; });
-  const image = { id: 'river-fish' };
+  const image = { id: 'river-fish', width: 1024, height: 1024 };
   const first = makeFakeCtx();
   const second = makeFakeCtx();
 
@@ -647,7 +660,7 @@ test('河流魚 Image 2 素材存在、非空且是有效 PNG', () => {
 
 test('河流小魚繪製各有一個淡漣漪，且缺失或失敗的漣漪 API 不會破壞 frame', () => {
   const fish = createRiverFish();
-  const image = { id: 'river-fish' };
+  const image = { id: 'river-fish', width: 1024, height: 1024 };
   const complete = makeFakeCtx();
 
   drawRiverFish(complete.ctx, fish, 1280, 720, 2, { riverFish: image });

@@ -192,11 +192,14 @@
   }
 
   const RIVER_FISH_LAYOUT = [
-    [0.07, 0.018, 1, 0.2, 30, 15, 0.30],
-    [0.31, 0.023, -1, 1.7, 33, 16.5, 0.34],
-    [0.58, 0.015, 1, 3.4, 36, 18, 0.38],
-    [0.84, 0.021, -1, 5.1, 39, 19.5, 0.42],
+    [0.07, 0.018, 1, 0.2, 36, 18, 0.58],
+    [0.31, 0.023, -1, 1.7, 40, 20, 0.62],
+    [0.58, 0.015, 1, 3.4, 44, 22, 0.66],
+    [0.84, 0.021, -1, 5.1, 48, 24, 0.70],
   ];
+
+  // Image 2 母圖是 1:1 方形；只取魚身內容區，排除透明 padding 與 halo。
+  const RIVER_FISH_SPRITE_CROP = Object.freeze({ x: 0.20, y: 0.34, width: 0.60, height: 0.28 });
 
   function createRiverFish() {
     return RIVER_FISH_LAYOUT.map(([progress, speed, direction, phase, width, height, opacity]) => ({
@@ -223,15 +226,33 @@
 
   function drawRiverFish(ctx, fish, w, h, t, images = animalImages) {
     let image;
+    let imageWidth;
+    let imageHeight;
     try {
       if (!ctx || !Array.isArray(fish) || !images || !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0
         || typeof ctx.save !== 'function' || typeof ctx.restore !== 'function' || typeof ctx.translate !== 'function'
         || typeof ctx.scale !== 'function' || typeof ctx.drawImage !== 'function') return;
       image = images.riverFish;
+      imageWidth = image && image.width;
+      imageHeight = image && image.height;
     } catch (_) {
       return;
     }
-    if (!image) return;
+    const crop = RIVER_FISH_SPRITE_CROP;
+    if (!image || !Number.isFinite(imageWidth) || !Number.isFinite(imageHeight)
+      || imageWidth <= 0 || imageHeight <= 0
+      || !crop || !Number.isFinite(crop.x) || !Number.isFinite(crop.y)
+      || !Number.isFinite(crop.width) || !Number.isFinite(crop.height)
+      || crop.x < 0 || crop.y < 0 || crop.width <= 0 || crop.height <= 0
+      || crop.x + crop.width > 1 || crop.y + crop.height > 1) return;
+
+    const sourceX = imageWidth * crop.x;
+    const sourceY = imageHeight * crop.y;
+    const sourceWidth = imageWidth * crop.width;
+    const sourceHeight = imageHeight * crop.height;
+    if (![sourceX, sourceY, sourceWidth, sourceHeight].every(Number.isFinite)
+      || sourceX < 0 || sourceY < 0 || sourceWidth <= 0 || sourceHeight <= 0
+      || sourceX + sourceWidth > imageWidth || sourceY + sourceHeight > imageHeight) return;
 
     const canvasScale = h / 720;
     const time = Number.isFinite(t) ? t : 0;
@@ -252,7 +273,8 @@
         ctx.globalAlpha = opacity;
         ctx.translate(x, y + Math.sin(time * 1.8 + item.phase) * 1.6 * canvasScale);
         if (item.direction < 0) ctx.scale(-1, 1);
-        ctx.drawImage(image, -drawnWidth / 2, -drawnHeight / 2, drawnWidth, drawnHeight);
+        ctx.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight,
+          -drawnWidth / 2, -drawnHeight / 2, drawnWidth, drawnHeight);
 
         // Sprite 預設朝右，尾端放在 local 左側；鏡像後仍會留在游動方向的後方。
         if (typeof ctx.beginPath === 'function' && typeof ctx.ellipse === 'function' && typeof ctx.stroke === 'function') {
