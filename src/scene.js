@@ -11,6 +11,87 @@
     bgImg.src = 'assets/backgrounds/bible-world.png';
   }
 
+  // 只保留供每幀繪製的小型 canvas；原始 Image 2 母圖在轉檔後不再被持有。
+  const animalImages = {
+    sheepWalking: null,
+    sheepGrazing: null,
+    birdUp: null,
+    birdDown: null,
+  };
+
+  function rasterizeRuntimeSprite(source, maxWidth, documentLike) {
+    let sourceWidth;
+    let sourceHeight;
+    try {
+      sourceWidth = source && source.width;
+      sourceHeight = source && source.height;
+    } catch (_) {
+      return null;
+    }
+    if (!source || !Number.isFinite(sourceWidth) || !Number.isFinite(sourceHeight)
+      || sourceWidth <= 0 || sourceHeight <= 0 || !Number.isFinite(maxWidth) || maxWidth < 1) return null;
+
+    let documentToUse = documentLike;
+    if (documentToUse === undefined) {
+      try {
+        documentToUse = typeof document === 'undefined' ? null : document;
+      } catch (_) {
+        return null;
+      }
+    }
+    if (!documentToUse || typeof documentToUse.createElement !== 'function') return null;
+
+    try {
+      const drawnWidth = Math.floor(Math.min(sourceWidth, maxWidth));
+      const drawnHeight = Math.max(1, Math.round(drawnWidth * sourceHeight / sourceWidth));
+      if (drawnWidth < 1 || !Number.isFinite(drawnHeight)) return null;
+      const canvas = documentToUse.createElement('canvas');
+      if (!canvas || typeof canvas.getContext !== 'function') return null;
+      canvas.width = drawnWidth;
+      canvas.height = drawnHeight;
+      const context = canvas.getContext('2d');
+      if (!context || typeof context.drawImage !== 'function') return null;
+      context.drawImage(source, 0, 0, drawnWidth, drawnHeight);
+      return canvas;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function loadRuntimeAnimalImage(key, path, maxWidth) {
+    let source = null;
+    const release = () => {
+      const loaded = source;
+      source = null;
+      if (!loaded) return;
+      try { loaded.onload = null; } catch (_) { /* detached when supported */ }
+      try { loaded.onerror = null; } catch (_) { /* detached when supported */ }
+    };
+    const settle = (runtimeSprite) => {
+      animalImages[key] = runtimeSprite;
+      release();
+    };
+
+    try {
+      source = new Image();
+      source.onload = () => settle(rasterizeRuntimeSprite(source, maxWidth));
+      source.onerror = () => settle(null);
+      source.src = path;
+    } catch (_) {
+      settle(null);
+    }
+  }
+
+  function loadAnimalImages() {
+    if (typeof Image === 'undefined') return;
+    loadRuntimeAnimalImage('sheepWalking', 'assets/sheep/sheep-walking.png', 320);
+    loadRuntimeAnimalImage('sheepGrazing', 'assets/sheep/sheep-grazing.png', 320);
+    loadRuntimeAnimalImage('birdUp', 'assets/birds/bird-wings-up.png', 192);
+    loadRuntimeAnimalImage('birdDown', 'assets/birds/bird-wings-down.png', 192);
+  }
+
+  loadAnimalImages();
+
   function createBubbles(w, h, count) {
     const bubbles = [];
     for (let i = 0; i < count; i++) {
@@ -230,6 +311,42 @@
     }));
   }
 
+  function drawSheep(ctx, sheep, t, canvasHeight, images = animalImages) {
+    if (!ctx || !sheep || !images || typeof ctx.save !== 'function' || typeof ctx.restore !== 'function'
+      || typeof ctx.translate !== 'function' || typeof ctx.scale !== 'function' || typeof ctx.drawImage !== 'function'
+      || !Number.isFinite(sheep.x) || !Number.isFinite(sheep.baseY) || !Number.isFinite(sheep.width)
+      || !Number.isFinite(sheep.height) || sheep.width <= 0 || sheep.height <= 0
+      || !Number.isFinite(canvasHeight) || canvasHeight <= 0) return;
+
+    const grazing = sheep.mode === 'grazing';
+    const image = grazing
+      ? (images.sheepGrazing || images.sheepWalking)
+      : (images.sheepWalking || images.sheepGrazing);
+    if (!image) return;
+
+    const canvasScale = canvasHeight / 800;
+    const depthScale = sheepScaleForY(sheep.baseY, canvasHeight * 0.60, canvasHeight * 0.93);
+    const drawnWidth = sheep.width * canvasScale * depthScale;
+    const drawnHeight = sheep.height * canvasScale * depthScale;
+    const phase = Number.isFinite(sheep.phase) ? sheep.phase : 0;
+    const time = Number.isFinite(t) ? t : 0;
+    let saved = false;
+    try {
+      ctx.save();
+      saved = true;
+      ctx.translate(sheep.x, sheep.baseY);
+      if (sheep.direction < 0) ctx.scale(-1, 1);
+      if (!grazing && typeof ctx.rotate === 'function') ctx.rotate(Math.sin(time * 6 + phase) * 0.035);
+      ctx.drawImage(image, -drawnWidth / 2, -drawnHeight, drawnWidth, drawnHeight);
+    } catch (_) {
+      // Canvas 不可用或圖片解碼失敗時略過單幀，不能中斷整個動畫。
+    } finally {
+      if (saved) {
+        try { ctx.restore(); } catch (_) { /* nothing left to restore safely */ }
+      }
+    }
+  }
+
   function sheepHitsBlocker(sheep, nextX, blocker) {
     if (!blocker || !Number.isFinite(blocker.x) || !Number.isFinite(blocker.baseY)) return false;
     const horizontal = Math.max(34, ((blocker.width || 80) + sheep.width) * 0.35);
@@ -322,10 +439,50 @@
     }
   }
 
+  function birdFrameOffsetX(isDownstroke, drawnWidth) {
+    return isDownstroke ? -0.049 * drawnWidth : 0;
+  }
+
+  function drawBirdFlock(ctx, flock, t, canvasHeight, images = animalImages) {
+    if (!ctx || !Array.isArray(flock) || !images || typeof ctx.save !== 'function' || typeof ctx.restore !== 'function'
+      || typeof ctx.translate !== 'function' || typeof ctx.scale !== 'function' || typeof ctx.drawImage !== 'function'
+      || !Number.isFinite(canvasHeight) || canvasHeight <= 0) return;
+
+    const canvasScale = canvasHeight / 800;
+    for (const bird of flock) {
+      if (!bird || !Number.isFinite(bird.x) || !Number.isFinite(bird.y) || !Number.isFinite(bird.width)
+        || !Number.isFinite(bird.height) || bird.width <= 0 || bird.height <= 0) continue;
+      const isDownstroke = Math.sin(Number.isFinite(bird.phase) ? bird.phase : 0) < 0;
+      const image = isDownstroke
+        ? (images.birdDown || images.birdUp)
+        : (images.birdUp || images.birdDown);
+      if (!image) continue;
+
+      const drawnWidth = bird.width * canvasScale;
+      const drawnHeight = bird.height * canvasScale;
+      const localX = -drawnWidth / 2 + birdFrameOffsetX(isDownstroke, drawnWidth);
+      let saved = false;
+      try {
+        ctx.save();
+        saved = true;
+        ctx.translate(bird.x, bird.y);
+        if (bird.direction < 0) ctx.scale(-1, 1);
+        // 偏移在鏡射用的 local transform 內，雙方向都對齊同一個翼根。
+        ctx.drawImage(image, localX, -drawnHeight / 2, drawnWidth, drawnHeight);
+      } catch (_) {
+        // 單隻失敗不能拖垮整個群集或 requestAnimationFrame。
+      } finally {
+        if (saved) {
+          try { ctx.restore(); } catch (_) { /* nothing left to restore safely */ }
+        }
+      }
+    }
+  }
+
   const api = {
     createBubbles, updateBubbles, drawBubbles, drawBackground, drawRiverFlow, drawForeground,
     gustStrength, drawCanopySway, createSheepFlock, sheepScaleForY, updateSheepFlock,
-    createBirdFlock, updateBirdFlock,
+    createBirdFlock, updateBirdFlock, rasterizeRuntimeSprite, drawSheep, drawBirdFlock,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.AquariumScene = api;

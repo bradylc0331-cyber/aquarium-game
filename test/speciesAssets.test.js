@@ -22,3 +22,19 @@ test('七位人物都有 4:3 寫實線稿與對齊的 400x300 掃描遮罩', () 
     assert.deepEqual(pngSize(mask), [400, 300], `${species.id} 遮罩尺寸錯誤`);
   }
 });
+
+test('四張核准的羊與飛鳥 Image 2 PNG 母圖存在且是有效 PNG', () => {
+  const approvedSprites = [
+    'assets/sheep/sheep-walking.png',
+    'assets/sheep/sheep-grazing.png',
+    'assets/birds/bird-wings-up.png',
+    'assets/birds/bird-wings-down.png',
+  ];
+
+  for (const relativePath of approvedSprites) {
+    const file = path.resolve(__dirname, '..', relativePath);
+    assert.ok(fs.existsSync(file), `${relativePath} 缺少核准母圖`);
+    assert.ok(fs.statSync(file).size > 1024, `${relativePath} 檔案過小`);
+    assert.equal(fs.readFileSync(file).toString('ascii', 1, 4), 'PNG', `${relativePath} 不是 PNG`);
+  }
+});

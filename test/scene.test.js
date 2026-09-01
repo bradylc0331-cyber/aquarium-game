@@ -11,6 +11,9 @@ const {
   updateSheepFlock,
   createBirdFlock,
   updateBirdFlock,
+  rasterizeRuntimeSprite,
+  drawSheep,
+  drawBirdFlock,
 } = require('../src/scene.js');
 
 // 用 Proxy 假裝一個 CanvasRenderingContext2D：任何方法呼叫都是 no-op，
@@ -22,7 +25,7 @@ function makeFakeCtx() {
   const handler = {
     get(target, prop) {
       if (prop === 'createLinearGradient') return () => gradientStub;
-      if (typeof prop === 'string' && /^(save|restore|beginPath|closePath|moveTo|lineTo|quadraticCurveTo|bezierCurveTo|arc|ellipse|fill|stroke|fillRect|scale|translate|rotate)$/.test(prop)) {
+      if (typeof prop === 'string' && /^(save|restore|beginPath|closePath|moveTo|lineTo|quadraticCurveTo|bezierCurveTo|arc|ellipse|fill|stroke|fillRect|drawImage|scale|translate|rotate)$/.test(prop)) {
         return (...args) => { calls.push([prop, args]); };
       }
       return target[prop];
@@ -359,4 +362,120 @@ test('resize 保留每隻羊在原草地內的相對橫向與深度位置', () =
   assertRelativePositions(shrinking, smallArea, shrinkingBefore);
   assert.ok(shrinking.every((sheep) => sheep.x >= smallArea.left && sheep.x <= smallArea.right));
   assert.ok(shrinking.every((sheep) => sheep.baseY >= smallArea.top && sheep.baseY <= smallArea.bottom));
+});
+
+test('runtime sprite rasterization 只畫一次、保留比例，且不會超過寬度上限', () => {
+  const draws = [];
+  const rasterContext = {
+    drawImage(...args) {
+      draws.push(args);
+    },
+  };
+  const documentLike = {
+    createElement(tag) {
+      assert.equal(tag, 'canvas');
+      return {
+        width: 0,
+        height: 0,
+        getContext() {
+          return rasterContext;
+        },
+      };
+    },
+  };
+  const source = { width: 640, height: 320 };
+
+  const runtimeSprite = rasterizeRuntimeSprite(source, 320, documentLike);
+
+  assert.equal(runtimeSprite.width, 320);
+  assert.equal(runtimeSprite.height, 160);
+  assert.deepEqual(draws, [[source, 0, 0, 320, 160]]);
+});
+
+test('runtime sprite rasterization 對不支援與拋例外的畫布回傳 null', () => {
+  const source = { width: 640, height: 320 };
+  const sourceWithThrowingWidth = {
+    get width() { throw new Error('source unavailable'); },
+    height: 320,
+  };
+
+  assert.equal(rasterizeRuntimeSprite(null, 320, null), null);
+  assert.equal(rasterizeRuntimeSprite(sourceWithThrowingWidth, 320, null), null);
+  assert.equal(rasterizeRuntimeSprite(source, 320, null), null);
+  assert.equal(rasterizeRuntimeSprite(source, 320, { createElement() { throw new Error('no canvas'); } }), null);
+  assert.equal(rasterizeRuntimeSprite(source, 320, {
+    createElement() {
+      return { getContext() { throw new Error('no context'); } };
+    },
+  }), null);
+  assert.equal(rasterizeRuntimeSprite(source, 320, {
+    createElement() {
+      return {
+        getContext() {
+          return { drawImage() { throw new Error('draw failed'); } };
+        },
+      };
+    },
+  }), null);
+});
+
+test('沒有已載入動物圖片時繪製函式不會讓 Node frame 崩潰', () => {
+  const { ctx } = makeFakeCtx();
+  const sheep = createSheepFlock(1000, 800, () => 0.5)[0];
+  const birds = createBirdFlock(1000, 800);
+
+  assert.doesNotThrow(() => drawSheep(ctx, sheep, 1.2, 800));
+  assert.doesNotThrow(() => drawBirdFlock(ctx, birds, 1.2, 800));
+});
+
+test('飛鳥振翅使用各自影格，且下拍只在 local X 加上量測的註冊偏移', () => {
+  const { ctx, calls } = makeFakeCtx();
+  const images = { birdUp: { id: 'up' }, birdDown: { id: 'down' } };
+  const commonBird = {
+    x: 300,
+    y: 120,
+    direction: 1,
+    width: 100,
+    height: 50,
+    flapSpeed: 5,
+  };
+
+  drawBirdFlock(ctx, [{ ...commonBird, phase: Math.PI / 2 }], 0, 800, images);
+  drawBirdFlock(ctx, [{ ...commonBird, phase: -Math.PI / 2 }], 0, 800, images);
+
+  const draws = calls.filter(([name]) => name === 'drawImage').map(([, args]) => args);
+  assert.equal(draws.length, 2);
+  assert.equal(draws[0][0], images.birdUp);
+  assert.equal(draws[1][0], images.birdDown);
+  assert.ok(Math.abs((draws[1][1] - draws[0][1]) + 4.9) < 1e-9);
+  assert.equal(draws[0][2], draws[1][2]);
+});
+
+test('動物偏好影格不可用時會退回另一個已載入的姿勢', () => {
+  const { ctx, calls } = makeFakeCtx();
+  const walking = { id: 'walking' };
+  const birdUp = { id: 'up' };
+  const sheep = {
+    x: 300,
+    baseY: 700,
+    direction: -1,
+    mode: 'grazing',
+    width: 80,
+    height: 60,
+    phase: 0,
+  };
+  const bird = {
+    x: 200,
+    y: 100,
+    direction: -1,
+    width: 60,
+    height: 40,
+    phase: -Math.PI / 2,
+  };
+
+  drawSheep(ctx, sheep, 0, 800, { sheepWalking: walking, sheepGrazing: null });
+  drawBirdFlock(ctx, [bird], 0, 800, { birdUp, birdDown: null });
+
+  const sources = calls.filter(([name]) => name === 'drawImage').map(([, args]) => args[0]);
+  assert.deepEqual(sources, [walking, birdUp]);
 });
