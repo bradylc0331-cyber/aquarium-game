@@ -192,14 +192,14 @@
   }
 
   const RIVER_FISH_LAYOUT = [
-    [0.52, 0.018, 1, 0.2, 36, 18, 0.58],
-    [0.60, 0.023, -1, 1.7, 40, 20, 0.62],
-    [0.68, 0.015, 1, 3.4, 44, 22, 0.66],
-    [0.76, 0.021, -1, 5.1, 48, 24, 0.70],
+    [0.50, 0.018, 1, 0.2, 36, 18, 0.58],
+    [0.55, 0.023, -1, 1.7, 40, 20, 0.62],
+    [0.60, 0.015, 1, 3.4, 44, 22, 0.66],
+    [0.65, 0.021, -1, 5.1, 48, 24, 0.70],
   ];
 
-  const RIVER_FISH_PROGRESS_START = 0.50;
-  const RIVER_FISH_PROGRESS_END = 0.80;
+  const RIVER_FISH_PROGRESS_START = 0.48;
+  const RIVER_FISH_PROGRESS_END = 0.68;
   const RIVER_FISH_PROGRESS_SPAN = RIVER_FISH_PROGRESS_END - RIVER_FISH_PROGRESS_START;
 
   function normalizeRiverFishProgress(progress) {
@@ -208,12 +208,19 @@
     return RIVER_FISH_PROGRESS_START + (wrapped < 0 ? wrapped + RIVER_FISH_PROGRESS_SPAN : wrapped);
   }
 
+  function riverTangentAngle(progress) {
+    const p = normalizeRiverFishProgress(progress);
+    const dx = 0.135 + 0.012 * Math.PI * 2 * Math.cos(Math.PI * 2 * p);
+    const dy = 0.245;
+    return Math.atan2(dy, dx);
+  }
+
   // Image 2 母圖是 1:1 方形；只取魚身內容區，排除透明 padding 與 halo。
   const RIVER_FISH_SPRITE_CROP = Object.freeze({ x: 0.20, y: 0.34, width: 0.60, height: 0.28 });
 
   function createRiverFish() {
     return RIVER_FISH_LAYOUT.map(([progress, speed, direction, phase, width, height, opacity]) => ({
-      progress, speed, direction, phase, width, height, opacity,
+      progress: normalizeRiverFishProgress(progress), speed, direction, phase, width, height, opacity,
     }));
   }
 
@@ -221,12 +228,13 @@
     if (!Array.isArray(fish) || !Number.isFinite(dt)) return;
     for (const item of fish) {
       try {
-        if (!item || !Number.isFinite(item.progress) || !Number.isFinite(item.speed) || item.speed < 0
+        if (!item || !Number.isFinite(item.speed) || item.speed < 0
           || !Number.isFinite(item.phase) || (item.direction !== 1 && item.direction !== -1)) continue;
+        const currentProgress = normalizeRiverFishProgress(item.progress);
         const progressStep = item.speed * dt;
         const phaseStep = (0.8 + item.speed * 16) * dt;
         if (!Number.isFinite(progressStep) || !Number.isFinite(phaseStep)) continue;
-        item.progress = normalizeRiverFishProgress(item.progress + item.direction * progressStep);
+        item.progress = normalizeRiverFishProgress(currentProgress + item.direction * progressStep);
         item.phase = normalizedProgress((item.phase / (Math.PI * 2)) + phaseStep / (Math.PI * 2)) * Math.PI * 2;
       } catch (_) {
         // 壞掉的外部狀態不能中斷同一幀其他魚的更新。
@@ -241,7 +249,7 @@
     try {
       if (!ctx || !Array.isArray(fish) || !images || !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0
         || typeof ctx.save !== 'function' || typeof ctx.restore !== 'function' || typeof ctx.translate !== 'function'
-        || typeof ctx.scale !== 'function' || typeof ctx.drawImage !== 'function') return;
+        || typeof ctx.rotate !== 'function' || typeof ctx.scale !== 'function' || typeof ctx.drawImage !== 'function') return;
       image = images.riverFish;
       imageWidth = image && image.width;
       imageHeight = image && image.height;
@@ -282,6 +290,7 @@
         saved = true;
         ctx.globalAlpha = opacity;
         ctx.translate(x, y + Math.sin(time * 1.8 + item.phase) * 1.6 * canvasScale);
+        ctx.rotate(riverTangentAngle(item.progress));
         if (item.direction < 0) ctx.scale(-1, 1);
         ctx.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight,
           -drawnWidth / 2, -drawnHeight / 2, drawnWidth, drawnHeight);
@@ -607,7 +616,7 @@
 
   const api = {
     createBubbles, updateBubbles, drawBubbles, drawBackground, drawRiverFlow, drawForeground,
-    riverPoint, createRiverFish, updateRiverFish, drawRiverFish, normalizeRiverFishProgress,
+    riverPoint, riverTangentAngle, createRiverFish, updateRiverFish, drawRiverFish, normalizeRiverFishProgress,
     gustStrength, drawCanopySway, createSheepFlock, sheepScaleForY, updateSheepFlock,
     createBirdFlock, updateBirdFlock, rasterizeRuntimeSprite, drawSheep, drawBirdFlock,
   };

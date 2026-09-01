@@ -17,6 +17,7 @@ const {
   drawSheep,
   drawBirdFlock,
   riverPoint,
+  riverTangentAngle,
   normalizeRiverFishProgress,
   createRiverFish,
   updateRiverFish,
@@ -530,7 +531,7 @@ test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
 
   assert.equal(fish.length, 4);
   assert.equal(new Set(fish.map((item) => item.progress)).size, 4);
-  assert.ok(fish.every((item) => item.progress >= 0.50 && item.progress < 0.80));
+  assert.ok(fish.every((item) => item.progress >= 0.48 && item.progress < 0.68));
   assert.equal(new Set(fish.map((item) => item.speed)).size, 4);
   assert.equal(new Set(fish.map((item) => item.phase)).size, 4);
   assert.ok(fish.every((item) => item.direction === 1 || item.direction === -1));
@@ -554,6 +555,36 @@ test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
   assert.ok(fish.every((item) => item.opacity >= 0.58 && item.opacity <= 0.70));
 });
 
+test('河流小魚依河道切線旋轉，逆流魚先旋轉再鏡像', () => {
+  const fish = createRiverFish();
+  const { ctx, calls } = makeFakeCtx();
+  const image = { id: 'river-fish', width: 1024, height: 1024 };
+
+  drawRiverFish(ctx, fish, 1280, 720, 0, { riverFish: image });
+
+  const rotations = calls.filter(([name]) => name === 'rotate').map(([, args]) => args[0]);
+  assert.equal(rotations.length, 4);
+  for (let i = 0; i < fish.length; i++) {
+    const p = normalizeRiverFishProgress(fish[i].progress);
+    const expected = Math.atan2(
+      0.245,
+      0.135 + 0.012 * 2 * Math.PI * Math.cos(2 * Math.PI * p),
+    );
+    assert.ok(Math.abs(rotations[i] - expected) < 1e-12);
+  }
+
+  const reverseIndex = fish.findIndex((item) => item.direction < 0);
+  const translateIndices = calls.reduce((indices, [name], index) => {
+    if (name === 'translate') indices.push(index);
+    return indices;
+  }, []);
+  const reverseTranslate = translateIndices[reverseIndex];
+  assert.ok(Number.isInteger(reverseTranslate));
+  assert.equal(calls[reverseTranslate + 1][0], 'rotate');
+  assert.equal(calls[reverseTranslate + 2][0], 'scale');
+  assert.equal(calls[reverseTranslate + 2][1][0], -1);
+});
+
 test('河道曲線的多個正規化點都落在河面範圍', () => {
   for (const progress of [0, 0.08, 0.2, 0.35, 0.5, 0.7, 0.85, 1]) {
     const { nx, ny } = riverPoint(progress);
@@ -568,34 +599,34 @@ test('河流小魚長時間更新後仍保持有限狀態並貼著河道', () =>
   for (let frame = 0; frame < 5000; frame++) updateRiverFish(fish, 0.05);
 
   for (const item of fish) {
-    assert.ok(Number.isFinite(item.progress) && item.progress >= 0.50 && item.progress < 0.80);
+    assert.ok(Number.isFinite(item.progress) && item.progress >= 0.48 && item.progress < 0.68);
     assert.ok(Number.isFinite(item.phase));
     const { nx, ny } = riverPoint(item.progress);
     assert.ok(nx >= 0.54 && nx <= 0.71);
-    assert.ok(ny >= 0.6275 && ny < 0.701);
+    assert.ok(ny >= 0.6226 && ny < 0.6717);
   }
 });
 
-test('河流小魚大步長更新以 0.30 下游河段包回，而不是以 1.0 包回', () => {
+test('河流小魚大步長更新以 0.20 安全河段包回，而不是以 1.0 包回', () => {
   const forward = createRiverFish()[0];
-  forward.progress = 0.79;
-  forward.speed = 1;
+  forward.progress = 0.67;
+  forward.speed = 0.02;
   forward.direction = 1;
   updateRiverFish([forward], 1);
-  assert.ok(Math.abs(forward.progress - 0.59) < 1e-12);
+  assert.ok(Math.abs(forward.progress - 0.49) < 1e-12);
 
   const reverse = createRiverFish()[1];
-  reverse.progress = 0.51;
-  reverse.speed = 1;
+  reverse.progress = 0.49;
+  reverse.speed = 0.02;
   reverse.direction = -1;
   updateRiverFish([reverse], 1);
-  assert.ok(Math.abs(reverse.progress - 0.71) < 1e-12);
+  assert.ok(Math.abs(reverse.progress - 0.67) < 1e-12);
 });
 
 test('河流小魚進度會包回下游水面，繪製也不接受上游或河岸進度', () => {
-  assert.equal(normalizeRiverFishProgress(0.50), 0.50);
-  assert.ok(normalizeRiverFishProgress(0.80) >= 0.50 && normalizeRiverFishProgress(0.80) < 0.80);
-  assert.ok(normalizeRiverFishProgress(-0.05) >= 0.50 && normalizeRiverFishProgress(-0.05) < 0.80);
+  assert.equal(normalizeRiverFishProgress(0.48), 0.48);
+  assert.ok(normalizeRiverFishProgress(0.68) >= 0.48 && normalizeRiverFishProgress(0.68) < 0.68);
+  assert.ok(normalizeRiverFishProgress(-0.05) >= 0.48 && normalizeRiverFishProgress(-0.05) < 0.68);
 
   const fish = createRiverFish();
   fish[0].progress = 0.05;
@@ -603,8 +634,8 @@ test('河流小魚進度會包回下游水面，繪製也不接受上游或河�
   fish[0].phase = 0;
   fish[1].phase = 0;
   updateRiverFish(fish.slice(0, 2), 0);
-  assert.ok(fish[0].progress >= 0.50 && fish[0].progress < 0.80);
-  assert.ok(fish[1].progress >= 0.50 && fish[1].progress < 0.80);
+  assert.ok(fish[0].progress >= 0.48 && fish[0].progress < 0.68);
+  assert.ok(fish[1].progress >= 0.48 && fish[1].progress < 0.68);
 
   const { ctx, calls } = makeFakeCtx();
   const image = { id: 'river-fish', width: 1024, height: 1024 };
@@ -616,7 +647,7 @@ test('河流小魚進度會包回下游水面，繪製也不接受上游或河�
     const scale = Math.max(1280 / 1672, 720 / 941);
     const expectedY = (720 - 941 * scale) / 2 + ny * 941 * scale;
     assert.ok(Math.abs(translates[i][1] - expectedY) < 1e-9);
-    assert.ok(ny >= 0.6275 && ny < 0.701);
+    assert.ok(ny >= 0.6226 && ny < 0.6717);
   }
 });
 
@@ -637,7 +668,7 @@ test('河流小魚繪製前會獨立把注入的上游進度包回下游水面',
     const progress = normalizeRiverFishProgress(fish[i].progress);
     const { ny } = riverPoint(progress);
     const expectedY = (720 - 941 * scale) / 2 + ny * 941 * scale;
-    assert.ok(ny >= 0.6275 && ny < 0.701);
+    assert.ok(ny >= 0.6226 && ny < 0.6717);
     assert.ok(Math.abs(translates[i][1] - expectedY) < 1e-9);
   }
 });
@@ -674,10 +705,29 @@ test('河流小魚的 ctx capability getter 拋錯時會安全略過', () => {
       return () => {};
     },
   });
+  const throwingRotateGetter = new Proxy({}, {
+    get(_, property) {
+      if (property === 'rotate') throw new Error('rotate getter failed');
+      return () => {};
+    },
+  });
   const images = { riverFish: { id: 'river-fish', width: 1024, height: 1024 } };
 
   assert.doesNotThrow(() => drawRiverFish(throwingSave, fish, 1280, 720, 1.2, images));
   assert.doesNotThrow(() => drawRiverFish(throwingDrawImage, fish, 1280, 720, 1.2, images));
+  assert.doesNotThrow(() => drawRiverFish(throwingRotateGetter, fish, 1280, 720, 1.2, images));
+
+  const rotateCalls = [];
+  const throwingRotateMethod = {
+    save() { rotateCalls.push('save'); },
+    restore() { rotateCalls.push('restore'); },
+    translate() { rotateCalls.push('translate'); },
+    rotate() { rotateCalls.push('rotate'); throw new Error('rotate method failed'); },
+    scale() { rotateCalls.push('scale'); },
+    drawImage() { rotateCalls.push('drawImage'); },
+  };
+  assert.doesNotThrow(() => drawRiverFish(throwingRotateMethod, fish, 1280, 720, 1.2, images));
+  assert.equal(rotateCalls.includes('drawImage'), false);
 });
 
 test('河流小魚素材 getter 拋錯時安全略過且不繪製', () => {
