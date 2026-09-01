@@ -527,7 +527,7 @@ test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
   assert.equal(new Set(fish.map((item) => item.speed)).size, 4);
   assert.equal(new Set(fish.map((item) => item.phase)).size, 4);
   assert.ok(fish.every((item) => item.direction === 1 || item.direction === -1));
-  assert.deepEqual(fish.map((item) => item.opacity), [0.32, 0.36, 0.40, 0.44]);
+  assert.deepEqual(fish.map((item) => item.opacity), [0.42, 0.46, 0.50, 0.54]);
 });
 
 test('河道曲線的多個正規化點都落在河面範圍', () => {
