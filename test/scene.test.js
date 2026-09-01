@@ -311,3 +311,52 @@ test('飛鳥在 production dt 會從兩端回來且維持有限狀態', () => {
   assert.notEqual(leftBird.phase, leftPhase);
   assert.ok([rightBird, leftBird].every((bird) => Number.isFinite(bird.x) && Number.isFinite(bird.y) && Number.isFinite(bird.phase)));
 });
+
+test('同尺寸更新也會把吃草與走動的羊夾回草地左右邊界', () => {
+  const area = { left: 40, right: 960, top: 600, bottom: 930 };
+  const [grazing, walking] = createSheepFlock(1000, 1000, () => 0.5);
+  grazing.x = -60;
+  grazing.mode = 'grazing';
+  grazing.modeTime = 10;
+  walking.x = 1001;
+  walking.mode = 'walking';
+  walking.modeTime = 10;
+
+  updateSheepFlock([grazing, walking], 0, area);
+
+  assert.ok(grazing.x >= area.left && grazing.x <= area.right);
+  assert.ok(walking.x >= area.left && walking.x <= area.right);
+});
+
+test('resize 保留每隻羊在原草地內的相對橫向與深度位置', () => {
+  const captureRelativePositions = (flock, area) => flock.map((sheep) => ({
+    x: (sheep.x - area.left) / (area.right - area.left),
+    depth: (sheep.baseY - area.top) / (area.bottom - area.top),
+  }));
+  const assertRelativePositions = (flock, area, before) => {
+    flock.forEach((sheep, index) => {
+      const x = (sheep.x - area.left) / (area.right - area.left);
+      const depth = (sheep.baseY - area.top) / (area.bottom - area.top);
+      assert.ok(Math.abs(x - before[index].x) < 1e-10, `第 ${index + 1} 隻羊的橫向比例改變了`);
+      assert.ok(Math.abs(depth - before[index].depth) < 1e-10, `第 ${index + 1} 隻羊的深度比例改變了`);
+    });
+  };
+
+  const oldSmallArea = { left: 51.2, right: 1228.8, top: 432, bottom: 669.6 };
+  const largeArea = { left: 76.8, right: 1843.2, top: 648, bottom: 1004.4 };
+  const growing = createSheepFlock(1280, 720, () => 0.5);
+  const growingBefore = captureRelativePositions(growing, oldSmallArea);
+  updateSheepFlock(growing, 0, largeArea);
+  assertRelativePositions(growing, largeArea, growingBefore);
+  assert.equal(new Set(growing.map((sheep) => sheep.x)).size, growing.length);
+  assert.equal(new Set(growing.map((sheep) => sheep.baseY)).size, growing.length);
+
+  const oldLargeArea = { left: 76.8, right: 1843.2, top: 648, bottom: 1004.4 };
+  const smallArea = { left: 51.2, right: 1228.8, top: 432, bottom: 669.6 };
+  const shrinking = createSheepFlock(1920, 1080, () => 0.5);
+  const shrinkingBefore = captureRelativePositions(shrinking, oldLargeArea);
+  updateSheepFlock(shrinking, 0, smallArea);
+  assertRelativePositions(shrinking, smallArea, shrinkingBefore);
+  assert.ok(shrinking.every((sheep) => sheep.x >= smallArea.left && sheep.x <= smallArea.right));
+  assert.ok(shrinking.every((sheep) => sheep.baseY >= smallArea.top && sheep.baseY <= smallArea.bottom));
+});

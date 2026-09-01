@@ -259,6 +259,7 @@
   function updateSheepFlock(flock, dt, area, blockers = [], random = Math.random) {
     for (const sheep of flock) {
       rebaseSheepForArea(sheep, area);
+      sheep.x = clamp(sheep.x, area.left, area.right);
       sheep.baseY = clamp(sheep.baseY, area.top, area.bottom);
       sheep.modeTime -= dt;
       if (sheep.modeTime <= 0) {
