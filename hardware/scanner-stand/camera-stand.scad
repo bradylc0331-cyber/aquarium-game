@@ -51,8 +51,10 @@ mast_wall   = 3;
 mast_fit    = 0.45;  // 套環／插座對立柱的滑配間隙
 seg_len     = 220;   // 主立柱節（A1 直立列印，離 256 上限留足餘裕）
 seg_short   = 120;   // 加長節
-plug_len    = 80;    // 接頭總長（上下各插入約 38）
+plug_len    = 80;    // 接頭總長
+plug_flange = 3;     // 接頭中央凸緣厚度（對接止點）
 plug_fit    = 0.35;
+joint_inset = 20;    // 立柱的接頭螺絲孔離管端多遠
 
 // --- 前伸臂 ----------------------------------------------------------------
 arm_w       = 12;    // 臂寬＝迎光面。做窄，在紙上只投一條淡線而不是一塊影子。
@@ -99,6 +101,13 @@ socket_in   = mast + mast_fit;
 socket_out  = socket_in + 2 * wall + 2;
 collar_hole = mast + mast_fit;
 collar_out  = collar_hole + 2 * collar_wall;
+
+// 接頭每一端實際插入多少（中央凸緣會吃掉 plug_flange/2）。
+// 螺帽袋的位置一定要從這個值推出來，不能從接頭端點量 —— 直接寫 joint_inset
+// 會讓螺帽偏 plug_flange/2，M4 螺絲在 7 mm 螺帽裡只有 1.5 mm 徑向餘裕，剛好會卡死。
+plug_ins     = (plug_len - plug_flange) / 2;
+plug_hole_lo = plug_ins - joint_inset;                 // 對到下管的孔
+plug_hole_hi = plug_ins + plug_flange + joint_inset;   // 對到上管的孔
 
 // 托架座標系：原點 = 鏡頭光軸，z = 0 是環的底面。
 // 機身正面落在 z = lip，背面在 z = lip + cam_thick。
@@ -193,7 +202,7 @@ module mast_segment(len) {
     difference() {
         linear_extrude(len) offset(r = 2) square(mast - 4, center = true);
         translate([0, 0, -1]) linear_extrude(len + 2) square(bore, center = true);
-        for (z = [20, len - 20])
+        for (z = [joint_inset, len - joint_inset])
             translate([0, 0, z]) rotate([0, 90, 0])
                 translate([0, 0, -mast]) cylinder(h = 2 * mast, d = m4_clear);
     }
@@ -210,10 +219,10 @@ module plug() {
     difference() {
         union() {
             linear_extrude(plug_len) square(s, center = true);
-            translate([0, 0, plug_len / 2 - 1.5])
-                linear_extrude(3) square(mast - 4, center = true);
+            translate([0, 0, (plug_len - plug_flange) / 2])
+                linear_extrude(plug_flange) square(mast - 4, center = true);
         }
-        for (z = [20, plug_len - 20]) {
+        for (z = [plug_hole_lo, plug_hole_hi]) {
             translate([0, 0, z]) rotate([0, 90, 0])
                 translate([0, 0, -s]) cylinder(h = 2 * s, d = m4_clear);
             translate([s / 2 - m4_nut_t, 0, z]) nut_pocket(m4_nut_t + 0.2);

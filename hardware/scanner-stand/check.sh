@@ -72,7 +72,15 @@ chk gap_plus      zero    "往外挪 0.1 要完全分開"
 chk gap_minus     nonzero "往內壓 0.5 要咬得到（證明真的有貼合）"
 
 echo
-echo "== 3. 列印板（3mf/）=="
+echo "== 3. 立柱接頭孔位（量匯出的網格，不看算式）=="
+if python3 -c "import trimesh, rtree" 2>/dev/null; then
+  python3 check-joint.py || fail=1
+else
+  echo "  略過：需要 pip install trimesh networkx rtree"
+fi
+
+echo
+echo "== 4. 列印板（3mf/）=="
 if python3 -c "import trimesh, networkx" 2>/dev/null; then
   python3 check-3mf.py || fail=1
 else
