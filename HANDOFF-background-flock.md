@@ -1,5 +1,9 @@
 # 交接：背景畫面與羊群
 
+> **這份交接已完成（2026-09-01）。** 羊群與鳥群都已實作並通過審查，
+> 見 `createSheepFlock` / `createBirdFlock`（`src/scene.js`）。以下內容保留作為
+> 當時的脈絡紀錄，第 6 節「不要碰的東西」已經失效，不要再當成現行限制。
+
 > ## 先確認你在對的地方
 >
 > | | |
@@ -12,7 +16,7 @@
 > git remote -v                # 要看到 aquarium-game
 > git branch --show-current    # 要看到 2-5d-character-motion
 > ls display.html control.html src/movement.js   # 三個都要在
-> npm test                     # 要看到 154 條全綠
+> npm test                     # 要看到 177 條全綠
 > ```
 >
 > **這個資料夾裡沒有這個檔案就是走錯 repo，停下來問 Brady。** 別去猜「最接近的
@@ -147,7 +151,7 @@ git show 3e7ea6e -- src/scene.js display.html   # 看它原本怎麼接進畫面
 
 ```bash
 npm run serve      # http://localhost:8933，靜態檔案，不用編譯
-npm test           # 現在是 154 條
+npm test           # 現在是 177 條
 ```
 
 用 **Chrome** 開 <http://localhost:8933/display.html>。
