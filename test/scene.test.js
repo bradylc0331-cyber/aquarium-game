@@ -536,7 +536,7 @@ const NX_MIN = Math.min(...RIVER_NX), NX_MAX = Math.max(...RIVER_NX);
 const NY_MIN = Math.min(...RIVER_NY), NY_MAX = Math.max(...RIVER_NY);
 const inFishStretch = (v) => v >= FISH_START - 1e-12 && v <= FISH_END + 1e-12;
 
-test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
+test('河流小魚固定八隻，且各自有不同的游動狀態', () => {
   const fish = createRiverFish();
   const { ctx, calls } = makeFakeCtx();
   const image = { id: 'river-fish', width: 1024, height: 1024 };
@@ -544,19 +544,20 @@ test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
   const draws = calls.filter(([name]) => name === 'drawImage').map(([, args]) => args);
   const dimensions = draws.map((args) => args.slice(7, 9));
 
-  assert.equal(fish.length, 4);
-  assert.equal(new Set(fish.map((item) => item.progress)).size, 4);
+  assert.equal(fish.length, 8);
+  assert.equal(new Set(fish.map((item) => item.progress)).size, 8);
   assert.ok(fish.every((item) => inFishStretch(item.progress)));
-  assert.equal(new Set(fish.map((item) => item.speed)).size, 4);
-  assert.equal(new Set(fish.map((item) => item.phase)).size, 4);
+  assert.equal(new Set(fish.map((item) => item.speed)).size, 8);
+  assert.equal(new Set(fish.map((item) => item.phase)).size, 8);
   assert.ok(fish.every((item) => item.direction === 1 || item.direction === -1));
   // 魚會隨景深縮放，所以不比固定像素值；改驗「越下游越大」與比例維持 2:1
-  assert.equal(dimensions.length, 4);
+  assert.equal(dimensions.length, 8);
   for (const [dw, dh] of dimensions) {
     assert.ok(dw > 0 && dh > 0);
     assert.ok(Math.abs(dw / dh - 2) < 1e-9, '魚的長寬比應該維持 2:1');
   }
-  // 景深看的是「離觀眾多遠」＝ny，不是河寬（河中段最寬，但那裡並不是最近）
+  // 尺寸差異只能來自景深，所以「離觀眾越近就越大」必須嚴格成立。
+  // 景深看的是 ny，不是河寬（河中段最寬，但那裡並不是最近）
   const byDepth = fish.map((f, i) => ({ ny: riverPoint(f.progress).ny, w: dimensions[i][0] }))
     .sort((a, b) => a.ny - b.ny);
   for (let i = 1; i < byDepth.length; i++) {
@@ -576,9 +577,9 @@ test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
       && Math.abs(sw - image.width * 0.60) <= epsilon
       && Math.abs(sh - image.height * 0.28) <= epsilon;
   }), '每隻魚都必須使用核准的 sprite crop 比例');
-  assert.deepEqual(fish.map((item) => item.opacity), [0.58, 0.62, 0.66, 0.70]);
-  assert.equal(new Set(fish.map((item) => item.opacity)).size, 4);
-  assert.ok(fish.every((item) => item.opacity >= 0.58 && item.opacity <= 0.70));
+  assert.deepEqual(fish.map((item) => item.opacity), [0.56, 0.60, 0.58, 0.64, 0.62, 0.66, 0.68, 0.70]);
+  assert.equal(new Set(fish.map((item) => item.opacity)).size, 8);
+  assert.ok(fish.every((item) => item.opacity >= 0.56 && item.opacity <= 0.70));
 });
 
 test('魚在轉彎處不會豎起來——場景是斜角透視，往深處游只是變小', () => {
@@ -691,7 +692,9 @@ test('河流小魚長時間更新後仍保持有限狀態並貼著河道', () =>
     assert.ok(Number.isFinite(item.progress) && inFishStretch(item.progress));
     assert.ok(Number.isFinite(item.phase));
     const { nx, ny } = riverPoint(item.progress);
-    assert.ok(nx >= riverPoint(FISH_START).nx - 1e-9 && nx <= riverPoint(FISH_END).nx + 1e-9);
+    // 河道會回彎，nx 不是單調的——不能拿頭尾兩點當上下界（舊版就是這樣寫的，
+    // 那是「河道是一條直斜線」的殘留假設）。改用整條折線的極值。
+    assert.ok(nx >= NX_MIN - 1e-9 && nx <= NX_MAX + 1e-9, `nx=${nx} 超出河道範圍`);
     assert.ok(ny >= riverPoint(FISH_START).ny - 1e-9 && ny <= riverPoint(FISH_END).ny + 1e-9);
   }
 });
@@ -904,11 +907,13 @@ test('河流小魚繪製各有一個淡漣漪，且缺失或失敗的漣漪 API 
   const complete = makeFakeCtx();
 
   drawRiverFish(complete.ctx, fish, 1280, 720, 2, { riverFish: image });
+  // 隻數跟著 createRiverFish 走，不要寫死——寫死的話改隻數就得改好幾處測試
   for (const method of ['drawImage', 'ellipse', 'stroke']) {
-    assert.equal(complete.calls.filter(([name]) => name === method).length, 4, `${method} 必須每隻各一次`);
+    assert.equal(complete.calls.filter(([name]) => name === method).length, fish.length,
+      `${method} 必須每隻各一次`);
   }
-  assert.equal(complete.calls.filter(([name]) => name === 'save').length, 4);
-  assert.equal(complete.calls.filter(([name]) => name === 'restore').length, 4);
+  assert.equal(complete.calls.filter(([name]) => name === 'save').length, fish.length);
+  assert.equal(complete.calls.filter(([name]) => name === 'restore').length, fish.length);
 
   const limitedCalls = [];
   const noRippleCtx = {
