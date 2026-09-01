@@ -52,6 +52,8 @@
   resize();
 
   const bubbles = AquariumScene.createBubbles(canvas.width, canvas.height, 40);
+  const sheepFlock = AquariumScene.createSheepFlock(canvas.width, canvas.height);
+  const birdFlock = AquariumScene.createBirdFlock(canvas.width, canvas.height);
   // 可行走區在每一幀重算（視窗會被縮放）。
   let walkable = Movement.getWalkableArea(canvas.width, canvas.height);
   // 天空帶：會飛的角色在這裡飄，完全不跟地面角色搶位子。
@@ -101,6 +103,9 @@
     artworkIds: () => manager.renderable.map((c) => c.artworkId),
     pendingCount: () => manager.pendingCount,
     positions: () => manager.renderable.map((c) => ({ id: c.artworkId, x: c.x, baseY: c.baseY })),
+    flockCounts: () => ({ sheep: sheepFlock.length, birds: birdFlock.length }),
+    sheepPositions: () => sheepFlock.map((sheep) => ({ x: sheep.x, baseY: sheep.baseY, mode: sheep.mode })),
+    birdPositions: () => birdFlock.map((bird) => ({ x: bird.x, y: bird.y, phase: bird.phase })),
     // 飛行角色要能單獨檢查：截圖看不出「頭頂被畫面上緣切掉幾像素」，
     // 也看不出天使到底有沒有在飄——牠飄得慢，兩張相隔很久的截圖看起來會一樣。
     flyers: () => manager.renderable.filter((c) => c.isFlying).map((c) => ({
@@ -339,17 +344,27 @@
       character.drivenByMovement = true;
     }
 
+    AquariumScene.updateSheepFlock(sheepFlock, dt, walkable, walkers);
+    AquariumScene.updateBirdFlock(birdFlock, dt, canvas.width, canvas.height);
     AquariumScene.updateBubbles(bubbles, dt, canvas.width, canvas.height);
 
     AquariumScene.drawBackground(ctx, canvas.width, canvas.height, elapsed);
     AquariumScene.drawCanopySway(ctx, canvas.width, canvas.height, elapsed);
     AquariumScene.drawBubbles(ctx, bubbles);
+    AquariumScene.drawBirdFlock(ctx, birdFlock, elapsed, canvas.height);
 
     // 角色依腳底深度排序，較靠近畫面下方的畫在前面，形成自然的 2.5D 景深。
-    const grounded = [...creatures].sort((a, b) => a.baseY - b.baseY);
-    for (const item of grounded) {
-      item.update(dt, elapsed);
-      item.draw(ctx, elapsed);
+    const grounded = [
+      ...creatures.map((item) => ({ kind: 'creature', baseY: item.baseY, item })),
+      ...sheepFlock.map((item) => ({ kind: 'sheep', baseY: item.baseY, item })),
+    ].sort((a, b) => a.baseY - b.baseY);
+    for (const entry of grounded) {
+      if (entry.kind === 'sheep') {
+        AquariumScene.drawSheep(ctx, entry.item, elapsed, canvas.height);
+        continue;
+      }
+      entry.item.update(dt, elapsed);
+      entry.item.draw(ctx, elapsed);
     }
 
     AquariumScene.drawForeground(ctx, canvas.width, canvas.height, elapsed);
