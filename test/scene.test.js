@@ -549,7 +549,17 @@ test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
   assert.equal(new Set(fish.map((item) => item.speed)).size, 4);
   assert.equal(new Set(fish.map((item) => item.phase)).size, 4);
   assert.ok(fish.every((item) => item.direction === 1 || item.direction === -1));
-  assert.deepEqual(dimensions, [[36, 18], [40, 20], [44, 22], [48, 24]]);
+  // 魚會隨景深縮放，所以不比固定像素值；改驗「越下游越大」與比例維持 2:1
+  assert.equal(dimensions.length, 4);
+  for (const [dw, dh] of dimensions) {
+    assert.ok(dw > 0 && dh > 0);
+    assert.ok(Math.abs(dw / dh - 2) < 1e-9, '魚的長寬比應該維持 2:1');
+  }
+  const downstream = fish.map((f, i) => ({ p: f.progress, w: dimensions[i][0] }))
+    .sort((a, b) => a.p - b.p);
+  for (let i = 1; i < downstream.length; i++) {
+    assert.ok(downstream[i].w >= downstream[i - 1].w, '越下游的魚不該比上游小');
+  }
   assert.ok(draws.every((args) => {
     assert.equal(args.length, 9);
     const [, sx, sy, sw, sh] = args;
@@ -610,18 +620,17 @@ test('河道控制點是照背景插畫量出來的那一組，換背景圖必�
   // 那件事只有把魚畫在背景上看才驗得出來。上一版的測試全綠，魚卻整段游在
   // 右岸草地上，就是因為當時的斷言只是把公式算出來的數字抄成期望值。
   // 改動河道之後請截圖確認，不要只看測試綠燈。
-  assert.equal(RIVER_PATH.length, 10);
+  assert.equal(RIVER_PATH.length, 9);
   assert.deepEqual(RIVER_PATH, [
-    [0.493, 0.536, 0.0025],
-    [0.515, 0.567, 0.0035],
-    [0.538, 0.596, 0.0042],
-    [0.555, 0.624, 0.0050],
-    [0.568, 0.648, 0.0060],
-    [0.580, 0.672, 0.0075],
-    [0.609, 0.696, 0.0100],
-    [0.640, 0.717, 0.0140],
-    [0.671, 0.732, 0.0175],
-    [0.703, 0.748, 0.0195],
+    [0.512, 0.518, 0.0105],
+    [0.529, 0.545, 0.0125],
+    [0.542, 0.570, 0.0130],
+    [0.557, 0.596, 0.0135],
+    [0.574, 0.627, 0.0145],
+    [0.593, 0.660, 0.0150],
+    [0.617, 0.693, 0.0160],
+    [0.636, 0.720, 0.0180],
+    [0.658, 0.746, 0.0185],
   ]);
   // 河道必須單調往右下、且越下游越寬，否則魚會倒退或忽大忽小
   for (let i = 1; i < RIVER_PATH.length; i++) {
@@ -635,7 +644,7 @@ test('魚的活動河段落在河面最寬的下游，且整段都在河道帶�
   // 上游窄到螢幕上不足 10px，折線只要差幾像素魚就上岸；下游寬，容錯大。
   const startHalf = riverHalfWidth(FISH_START);
   const endHalf = riverHalfWidth(FISH_END);
-  assert.ok(startHalf >= 0.008, `魚的上游端河寬只有 ${startHalf}，太窄`);
+  assert.ok(startHalf >= 0.010, `魚的上游端河寬只有 ${startHalf}，太窄`);
   assert.ok(endHalf > startHalf, '下游應該比上游寬');
   const fish = createRiverFish();
   for (let frame = 0; frame < 3000; frame++) {

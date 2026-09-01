@@ -172,21 +172,23 @@
   // 數字盒，而不是「這些點在圖上是不是水」。這種測試永遠不會紅。
   const RIVER_PATH = [
     // [nx, ny, halfWidth]——上游窄、下游寬
-    [0.493, 0.536, 0.0025],
-    [0.515, 0.567, 0.0035],
-    [0.538, 0.596, 0.0042],
-    [0.555, 0.624, 0.0050],
-    [0.568, 0.648, 0.0060],
-    [0.580, 0.672, 0.0075],
-    [0.609, 0.696, 0.0100],
-    [0.640, 0.717, 0.0140],
-    [0.671, 0.732, 0.0175],
-    [0.703, 0.748, 0.0195],
+    [0.512, 0.518, 0.0105],
+    [0.529, 0.545, 0.0125],
+    [0.542, 0.570, 0.0130],
+    [0.557, 0.596, 0.0135],
+    [0.574, 0.627, 0.0145],
+    [0.593, 0.660, 0.0150],
+    [0.617, 0.693, 0.0160],
+    [0.636, 0.720, 0.0180],
+    [0.658, 0.746, 0.0185],
   ];
 
   // progress 0~1 沿著折線等分內插（每段長度相近，不另外做弧長參數化）。
   function riverSample(progress) {
-    const p = normalizedProgress(progress);
+    // 這裡要**夾住**不是取模：normalizedProgress(1) 會變成 0，
+    // riverPoint(1) 就會回傳河的起點而不是終點，色帶與水光都會多出一條斜線。
+    const raw = Number.isFinite(progress) ? progress : 0;
+    const p = raw < 0 ? 0 : (raw > 1 ? 1 : raw);
     const span = RIVER_PATH.length - 1;
     const scaled = Math.min(span - 1e-9, p * span);
     const i = Math.floor(scaled);
@@ -232,16 +234,16 @@
   }
 
   const RIVER_FISH_LAYOUT = [
-    [0.67, 0.018, 1, 0.2, 36, 18, 0.58],
-    [0.74, 0.023, -1, 1.7, 40, 20, 0.62],
-    [0.81, 0.015, 1, 3.4, 44, 22, 0.66],
-    [0.88, 0.021, -1, 5.1, 48, 24, 0.70],
+    [0.42, 0.018, 1, 0.2, 36, 18, 0.58],
+    [0.58, 0.023, -1, 1.7, 40, 20, 0.62],
+    [0.74, 0.015, 1, 3.4, 44, 22, 0.66],
+    [0.89, 0.021, -1, 5.1, 48, 24, 0.70],
   ];
 
   // 魚只在河面最寬、最確定的那一段活動。上游窄到螢幕上不足 10px，
   // 與其把折線修到完美，不如讓魚待在容錯大的地方——折線還有幾像素誤差也不會上岸。
-  const RIVER_FISH_PROGRESS_START = 0.64;
-  const RIVER_FISH_PROGRESS_END = 0.92;
+  const RIVER_FISH_PROGRESS_START = 0.34;
+  const RIVER_FISH_PROGRESS_END = 0.95;
   const RIVER_FISH_PROGRESS_SPAN = RIVER_FISH_PROGRESS_END - RIVER_FISH_PROGRESS_START;
 
   // 把進度收進安全河段。**用夾住，不是繞回**——繞回會讓游到下游端點的魚
@@ -346,8 +348,11 @@
           || !Number.isFinite(item.height) || !Number.isFinite(item.opacity) || item.width <= 0 || item.height <= 0) continue;
         const { nx, ny } = riverPoint(normalizeRiverFishProgress(item.progress));
         const [x, y] = coverPoint(w, h, nx, ny);
-        const drawnWidth = item.width * canvasScale;
-        const drawnHeight = item.height * canvasScale;
+        // 上游窄且遠，魚要跟著變小——否則延伸到上游時魚會比河還寬。
+        // 以河寬為景深比例尺，最下游 = 1.0。
+        const depth = riverHalfWidth(item.progress) / riverHalfWidth(RIVER_FISH_PROGRESS_END);
+        const drawnWidth = item.width * canvasScale * depth;
+        const drawnHeight = item.height * canvasScale * depth;
         if (!Number.isFinite(drawnWidth) || !Number.isFinite(drawnHeight) || drawnWidth <= 0 || drawnHeight <= 0) continue;
 
         const opacity = Math.max(0, Math.min(1, item.opacity));
