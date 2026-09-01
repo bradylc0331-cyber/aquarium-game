@@ -365,9 +365,17 @@
         ctx.save();
         saved = true;
         ctx.globalAlpha = opacity;
+        // 側視的魚**永遠不能轉超過 ±90°**，否則會變成肚子朝上。
+        // 河道回彎那一段是往左流的（螢幕方向角 164°），直接 rotate 就翻過去了。
+        // 往左走要改用「鏡像 + 補角」：鏡像會把角度 a 映成 180°-a，
+        // 所以取 atan2(dy, |dx|) 再鏡像，得到的朝向就是真正的前進方向，
+        // 而且角度恆在 ±90° 內，魚永遠是背朝上的。
+        const tangent = riverTangentAngle(item.progress);
+        const dirX = Math.cos(tangent) * item.direction;
+        const dirY = Math.sin(tangent) * item.direction;
         ctx.translate(x, y + Math.sin(time * 1.8 + item.phase) * 1.6 * canvasScale);
-        ctx.rotate(riverTangentAngle(item.progress));
-        if (item.direction < 0) ctx.scale(-1, 1);
+        ctx.rotate(Math.atan2(dirY, Math.abs(dirX)));
+        if (dirX < 0) ctx.scale(-1, 1);
         ctx.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight,
           -drawnWidth / 2, -drawnHeight / 2, drawnWidth, drawnHeight);
 

@@ -580,38 +580,47 @@ test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
   assert.ok(fish.every((item) => item.opacity >= 0.58 && item.opacity <= 0.70));
 });
 
-test('河流小魚依河道切線旋轉，逆流魚先旋轉再鏡像', () => {
+test('魚永遠背朝上，且頭朝著前進方向——回彎那段河是往左流的', () => {
+  // 側視 sprite 轉超過 ±90° 就會肚子朝上。河道有一段的螢幕方向角是 164°
+  // （往左流），直接 rotate 就翻過去了，而且鏡像後頭尾也對不上前進方向。
+  // 正確做法是「鏡像 + 補角」：鏡像把角度 a 映成 180°-a。
   const fish = createRiverFish();
   const { ctx, calls } = makeFakeCtx();
   const image = { id: 'river-fish', width: 1024, height: 1024 };
-
   drawRiverFish(ctx, fish, 1280, 720, 0, { riverFish: image });
 
-  const rotations = calls.filter(([name]) => name === 'rotate').map(([, args]) => args[0]);
-  assert.equal(rotations.length, 4);
-  // 期望值由「河道路徑本身」推導：取前後兩點，換算成螢幕像素方向再取角度。
-  // 不抄實作的算式——抄了就變成把實作重寫一次，實作錯了測試也跟著錯。
-  const scaleFor = (w, h) => Math.max(w / 1672, h / 941);
-  for (let i = 0; i < fish.length; i++) {
-    const p = normalizeRiverFishProgress(fish[i].progress);
-    const a = riverPoint(Math.max(FISH_START, p - 0.01));
-    const b = riverPoint(Math.min(FISH_END, p + 0.01));
-    const k = scaleFor(1280, 720);
-    const expected = Math.atan2((b.ny - a.ny) * 941 * k, (b.nx - a.nx) * 1672 * k);
-    assert.ok(Math.abs(rotations[i] - expected) < 1e-9,
-      `第 ${i} 隻魚的角度 ${rotations[i]} 與河道實際走向 ${expected} 不符`);
+  // 把每隻魚的 rotate 與其後是否 scale(-1,1) 配成一組
+  const ops = [];
+  for (let i = 0; i < calls.length; i++) {
+    if (calls[i][0] !== 'rotate') continue;
+    const mirrored = calls[i + 1] && calls[i + 1][0] === 'scale' && calls[i + 1][1][0] === -1;
+    ops.push({ angle: calls[i][1][0], mirrored });
   }
+  assert.equal(ops.length, fish.length);
 
-  const reverseIndex = fish.findIndex((item) => item.direction < 0);
-  const translateIndices = calls.reduce((indices, [name], index) => {
-    if (name === 'translate') indices.push(index);
-    return indices;
-  }, []);
-  const reverseTranslate = translateIndices[reverseIndex];
-  assert.ok(Number.isInteger(reverseTranslate));
-  assert.equal(calls[reverseTranslate + 1][0], 'rotate');
-  assert.equal(calls[reverseTranslate + 2][0], 'scale');
-  assert.equal(calls[reverseTranslate + 2][1][0], -1);
+  const k = Math.max(1280 / 1672, 720 / 941);
+  for (let i = 0; i < fish.length; i++) {
+    const { angle, mirrored } = ops[i];
+    // 1. 永遠不會肚子朝上
+    assert.ok(Math.abs(angle) <= Math.PI / 2 + 1e-9,
+      `第 ${i} 隻魚轉了 ${(angle * 180 / Math.PI).toFixed(1)}°，超過 ±90° 會肚子朝上`);
+
+    // 2. 還原出來的朝向要等於前進方向（期望值由河道路徑推導，不抄實作）
+    const p = normalizeRiverFishProgress(fish[i].progress);
+    const a2 = riverPoint(Math.max(FISH_START, p - 0.01));
+    const b2 = riverPoint(Math.min(FISH_END, p + 0.01));
+    const dir = fish[i].direction;
+    const wantX = (b2.nx - a2.nx) * 1672 * k * dir;
+    const wantY = (b2.ny - a2.ny) * 941 * k * dir;
+    const want = Math.atan2(wantY, wantX);
+    const facing = mirrored ? Math.PI - angle : angle;
+    const diff = Math.abs(Math.atan2(Math.sin(facing - want), Math.cos(facing - want)));
+    assert.ok(diff < 1e-9,
+      `第 ${i} 隻魚頭朝 ${(facing * 180 / Math.PI).toFixed(1)}°，前進方向是 ${(want * 180 / Math.PI).toFixed(1)}°`);
+
+    // 3. 往左走一定要鏡像，往右走一定不鏡像
+    assert.equal(mirrored, wantX < 0, `第 ${i} 隻魚的鏡像判斷跟前進方向不一致`);
+  }
 });
 
 test('河道控制點是照背景插畫量出來的那一組，換背景圖必須重量', () => {
