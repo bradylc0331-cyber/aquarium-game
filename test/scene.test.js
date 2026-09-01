@@ -521,13 +521,21 @@ test('動物偏好影格不可用時會退回另一個已載入的姿勢', () =>
 
 test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
   const fish = createRiverFish();
+  const { ctx, calls } = makeFakeCtx();
+  drawRiverFish(ctx, fish, 1280, 720, 0, { riverFish: { id: 'river-fish' } });
+  const dimensions = calls.filter(([name]) => name === 'drawImage').map(([, args]) => args.slice(3, 5));
 
   assert.equal(fish.length, 4);
   assert.equal(new Set(fish.map((item) => item.progress)).size, 4);
   assert.equal(new Set(fish.map((item) => item.speed)).size, 4);
   assert.equal(new Set(fish.map((item) => item.phase)).size, 4);
   assert.ok(fish.every((item) => item.direction === 1 || item.direction === -1));
-  assert.deepEqual(fish.map((item) => item.opacity), [0.42, 0.46, 0.50, 0.54]);
+  assert.deepEqual(dimensions, [[30, 15], [33, 16.5], [36, 18], [39, 19.5]]);
+  assert.ok(dimensions.every(([width, height]) => width >= 30 && width <= 40 && height > 0
+    && Math.abs(height / width - 0.5) < 1e-9));
+  assert.deepEqual(fish.map((item) => item.opacity), [0.30, 0.34, 0.38, 0.42]);
+  assert.equal(new Set(fish.map((item) => item.opacity)).size, 4);
+  assert.ok(fish.every((item) => item.opacity >= 0.28 && item.opacity <= 0.45));
 });
 
 test('河道曲線的多個正規化點都落在河面範圍', () => {
