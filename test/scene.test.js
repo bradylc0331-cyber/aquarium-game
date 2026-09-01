@@ -199,6 +199,36 @@ test('飛鳥固定六隻、分布在天空，而且振翅相位不同', () => {
   assert.ok(new Set(birds.map((bird) => bird.phase)).size > 3);
 });
 
+test('第一幀的六隻飛鳥都完整落在畫布內', () => {
+  const width = 1280;
+  const height = 720;
+  const birds = createBirdFlock(width, height);
+  const { ctx, calls } = makeFakeCtx();
+  drawBirdFlock(ctx, birds, 0, height, { birdUp: { id: 'up' }, birdDown: { id: 'down' } });
+
+  const rectangles = [];
+  let translateX = 0;
+  let mirrored = false;
+  for (const [name, args] of calls) {
+    if (name === 'translate') {
+      [translateX] = args;
+      mirrored = false;
+    } else if (name === 'scale' && args[0] < 0) {
+      mirrored = true;
+    } else if (name === 'drawImage') {
+      const [, localX, , drawnWidth] = args;
+      rectangles.push(mirrored
+        ? [translateX - localX - drawnWidth, translateX - localX]
+        : [translateX + localX, translateX + localX + drawnWidth]);
+    }
+  }
+
+  assert.equal(rectangles.length, 6);
+  assert.ok(rectangles.every(([left, right]) => left >= 0 && right <= width));
+  assert.equal(birds.filter((bird) => bird.direction === 1).length, 3);
+  assert.equal(birds.filter((bird) => bird.direction === -1).length, 3);
+});
+
 test('飛鳥離開一側後從另一側回到天空，不會永遠消失', () => {
   const bird = createBirdFlock(1000, 800)[0];
   bird.direction = 1;
