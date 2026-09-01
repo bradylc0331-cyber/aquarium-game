@@ -283,11 +283,15 @@
   }
 
   // Image 2 母圖是 1:1 方形；只取魚身內容區，排除透明 padding 與 halo。
+  // 魚最多只傾斜這麼多（約 18°）。場景是斜角透視，往深處游不該把魚立起來。
+  const MAX_FISH_TILT = 0.32;
+
   const RIVER_FISH_SPRITE_CROP = Object.freeze({ x: 0.20, y: 0.34, width: 0.60, height: 0.28 });
 
   function createRiverFish() {
     return RIVER_FISH_LAYOUT.map(([progress, speed, direction, phase, width, height, opacity]) => ({
       progress: normalizeRiverFishProgress(progress), speed, direction, phase, width, height, opacity,
+      facing: direction,
     }));
   }
 
@@ -304,6 +308,10 @@
         const next = reflectProgress(currentProgress + item.direction * progressStep, item.direction);
         item.progress = next.progress;
         item.direction = next.direction;
+        // 朝向只在水平分量夠明確時才改，回彎頂點附近維持原朝向不亂翻。
+        const heading = Math.cos(riverTangentAngle(item.progress)) * item.direction;
+        if (Math.abs(heading) > 0.2) item.facing = heading < 0 ? -1 : 1;
+        else if (item.facing !== -1 && item.facing !== 1) item.facing = item.direction;
         item.phase = normalizedProgress((item.phase / (Math.PI * 2)) + phaseStep / (Math.PI * 2)) * Math.PI * 2;
       } catch (_) {
         // 壞掉的外部狀態不能中斷同一幀其他魚的更新。
@@ -365,17 +373,24 @@
         ctx.save();
         saved = true;
         ctx.globalAlpha = opacity;
-        // 側視的魚**永遠不能轉超過 ±90°**，否則會變成肚子朝上。
-        // 河道回彎那一段是往左流的（螢幕方向角 164°），直接 rotate 就翻過去了。
-        // 往左走要改用「鏡像 + 補角」：鏡像會把角度 a 映成 180°-a，
-        // 所以取 atan2(dy, |dx|) 再鏡像，得到的朝向就是真正的前進方向，
-        // 而且角度恆在 ±90° 內，魚永遠是背朝上的。
+        // 這是**斜角透視**的場景，不是俯視圖：河道往畫面上方走代表魚正在游遠，
+        // 不是游向天空。所以側視的魚在那裡應該幾乎保持水平（只是變小），
+        // 不能跟著螢幕方向角立起來——直接照切線轉，回彎處的魚會垂直豎在畫面上。
+        //
+        // 作法：傾斜量取「前進方向的垂直分量比例」再乘一個上限，因此
+        // 橫向游＝不傾斜、往深處游＝最多 MAX_FISH_TILT，中間平滑過渡，
+        // 而且 dirX 過零時不會像 atan2 那樣跳到 ±90°。
         const tangent = riverTangentAngle(item.progress);
         const dirX = Math.cos(tangent) * item.direction;
         const dirY = Math.sin(tangent) * item.direction;
+        const dirLen = Math.hypot(dirX, dirY) || 1;
+        const tilt = MAX_FISH_TILT * (dirY / dirLen);
+        // 朝左朝右用 facing（帶遲滯，見 updateRiverFish），不用瞬時的 dirX——
+        // 回彎頂點 dirX 會過零，用瞬時值會讓魚在那裡反覆翻面。
+        const facing = item.facing === -1 || item.facing === 1 ? item.facing : item.direction;
         ctx.translate(x, y + Math.sin(time * 1.8 + item.phase) * 1.6 * canvasScale);
-        ctx.rotate(Math.atan2(dirY, Math.abs(dirX)));
-        if (dirX < 0) ctx.scale(-1, 1);
+        ctx.rotate(tilt);
+        if (facing < 0) ctx.scale(-1, 1);
         ctx.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight,
           -drawnWidth / 2, -drawnHeight / 2, drawnWidth, drawnHeight);
 
@@ -700,7 +715,7 @@
 
   const api = {
     createBubbles, updateBubbles, drawBubbles, drawBackground, drawRiverFlow, drawForeground,
-    riverPoint, riverHalfWidth, riverTangentAngle, RIVER_PATH, reflectProgress,
+    riverPoint, riverHalfWidth, riverTangentAngle, RIVER_PATH, reflectProgress, MAX_FISH_TILT,
     RIVER_FISH_RANGE: { start: RIVER_FISH_PROGRESS_START, end: RIVER_FISH_PROGRESS_END }, createRiverFish, updateRiverFish, drawRiverFish, normalizeRiverFishProgress,
     gustStrength, drawCanopySway, createSheepFlock, sheepScaleForY, updateSheepFlock,
     createBirdFlock, updateBirdFlock, rasterizeRuntimeSprite, drawSheep, drawBirdFlock,
