@@ -555,10 +555,11 @@ test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
     assert.ok(dw > 0 && dh > 0);
     assert.ok(Math.abs(dw / dh - 2) < 1e-9, '魚的長寬比應該維持 2:1');
   }
-  const downstream = fish.map((f, i) => ({ p: f.progress, w: dimensions[i][0] }))
-    .sort((a, b) => a.p - b.p);
-  for (let i = 1; i < downstream.length; i++) {
-    assert.ok(downstream[i].w >= downstream[i - 1].w, '越下游的魚不該比上游小');
+  // 景深看的是「離觀眾多遠」＝ny，不是河寬（河中段最寬，但那裡並不是最近）
+  const byDepth = fish.map((f, i) => ({ ny: riverPoint(f.progress).ny, w: dimensions[i][0] }))
+    .sort((a, b) => a.ny - b.ny);
+  for (let i = 1; i < byDepth.length; i++) {
+    assert.ok(byDepth[i].w >= byDepth[i - 1].w, '越靠近畫面下方（離觀眾越近）的魚不該比較小');
   }
   assert.ok(draws.every((args) => {
     assert.equal(args.length, 9);
@@ -620,29 +621,24 @@ test('河道控制點是照背景插畫量出來的那一組，換背景圖必�
   // 那件事只有把魚畫在背景上看才驗得出來。上一版的測試全綠，魚卻整段游在
   // 右岸草地上，就是因為當時的斷言只是把公式算出來的數字抄成期望值。
   // 改動河道之後請截圖確認，不要只看測試綠燈。
-  assert.equal(RIVER_PATH.length, 11);
+  assert.equal(RIVER_PATH.length, 8);
   assert.deepEqual(RIVER_PATH, [
-    [0.397, 0.531, 0.0035],
-    [0.432, 0.533, 0.004],
-    [0.462, 0.537, 0.005],
-    [0.482, 0.545, 0.006],
-    [0.513, 0.572, 0.008],
-    [0.547, 0.607, 0.01],
-    [0.576, 0.637, 0.0115],
-    [0.604, 0.667, 0.013],
-    [0.639, 0.697, 0.0145],
-    [0.673, 0.727, 0.016],
-    [0.702, 0.745, 0.0165],
+    [0.577, 0.577, 0.0110],
+    [0.607, 0.604, 0.0180],
+    [0.604, 0.625, 0.0250],
+    [0.561, 0.647, 0.0290],
+    [0.561, 0.683, 0.0330],
+    [0.606, 0.706, 0.0330],
+    [0.663, 0.735, 0.0260],
+    [0.694, 0.758, 0.0150],
   ]);
-  // ㄑ 字形：轉折點之前近乎水平，之後才明顯下降。這條守住「折線真的有那個彎」。
-  const slope = (i) => (RIVER_PATH[i + 1][1] - RIVER_PATH[i][1]) / (RIVER_PATH[i + 1][0] - RIVER_PATH[i][0]);
-  assert.ok(slope(0) < 0.3, `轉折點之前應該近乎水平，實際斜率 ${slope(0)}`);
-  assert.ok(slope(5) > 0.8, `轉折點之後應該明顯下降，實際斜率 ${slope(5)}`);
-  // 河道必須單調往右下、且越下游越寬，否則魚會倒退或忽大忽小
+  // 河道會回彎：nx 不是單調的。只釘 golden 座標的話，有人把它拉成直線也不會紅。
+  const dx = RIVER_PATH.slice(1).map(([nx], i) => nx - RIVER_PATH[i][0]);
+  assert.ok(dx.some((v) => v > 0) && dx.some((v) => v < 0), '河道應該有回彎，不是一條直斜線');
+  // ny 必須單調往下游，否則魚會倒退
   for (let i = 1; i < RIVER_PATH.length; i++) {
-    assert.ok(RIVER_PATH[i][0] > RIVER_PATH[i - 1][0], `控制點 ${i} 沒有往右`);
-    assert.ok(RIVER_PATH[i][1] > RIVER_PATH[i - 1][1], `控制點 ${i} 沒有往下`);
-    assert.ok(RIVER_PATH[i][2] >= RIVER_PATH[i - 1][2], `控制點 ${i} 的河寬變窄了`);
+    assert.ok(RIVER_PATH[i][1] > RIVER_PATH[i - 1][1], `控制點 ${i} 的 ny 沒有往下游`);
+    assert.ok(RIVER_PATH[i][2] > 0 && RIVER_PATH[i][2] < 0.06, `控制點 ${i} 的河寬不合理`);
   }
 });
 
@@ -650,7 +646,7 @@ test('魚的活動河段落在河面最寬的下游，且整段都在河道帶�
   // 上游窄到螢幕上不足 10px，折線只要差幾像素魚就上岸；下游寬，容錯大。
   const startHalf = riverHalfWidth(FISH_START);
   const endHalf = riverHalfWidth(FISH_END);
-  assert.ok(startHalf >= 0.004, `魚的上游端河寬只有 ${startHalf}，太窄`);
+  assert.ok(startHalf >= 0.008, `魚的上游端河寬只有 ${startHalf}，太窄`);
   assert.ok(endHalf > startHalf, '下游應該比上游寬');
   const fish = createRiverFish();
   for (let frame = 0; frame < 3000; frame++) {

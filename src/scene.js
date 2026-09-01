@@ -172,19 +172,17 @@
   // 數字盒，而不是「這些點在圖上是不是水」。這種測試永遠不會紅。
   const RIVER_PATH = [
     // [nx, ny, halfWidth]
-    // 河道是「ㄑ」字形：先從左邊近乎水平流過來，在 (0.47, 0.545) 折向右下。
-    // 轉折點以上那一段以前完全沒有被描述，所以魚只能走下半段。
-    [0.397, 0.531, 0.0035],
-    [0.432, 0.533, 0.0040],
-    [0.462, 0.537, 0.0050],
-    [0.482, 0.545, 0.0060],   // ← ㄑ 的轉折
-    [0.513, 0.572, 0.0080],
-    [0.547, 0.607, 0.0100],
-    [0.576, 0.637, 0.0115],
-    [0.604, 0.667, 0.0130],
-    [0.639, 0.697, 0.0145],
-    [0.673, 0.727, 0.0160],
-    [0.702, 0.745, 0.0165],
+    // 2026-09-01 由 river-calibrate.html 實機描出河岸輪廓後對接兩臂求得的中心線。
+    // 河道是會回彎的：往右下 → 折回左 → 再往右下，不是一條直斜線。
+    // **換背景圖必須用 river-calibrate.html 重描。**
+    [0.577, 0.577, 0.0110],
+    [0.607, 0.604, 0.0180],
+    [0.604, 0.625, 0.0250],
+    [0.561, 0.647, 0.0290],
+    [0.561, 0.683, 0.0330],
+    [0.606, 0.706, 0.0330],
+    [0.663, 0.735, 0.0260],
+    [0.694, 0.758, 0.0150],
   ];
 
   // progress 0~1 沿著折線等分內插（每段長度相近，不另外做弧長參數化）。
@@ -238,15 +236,15 @@
   }
 
   const RIVER_FISH_LAYOUT = [
-    [0.26, 0.018, 1, 0.2, 36, 18, 0.58],
-    [0.48, 0.023, -1, 1.7, 40, 20, 0.62],
-    [0.70, 0.015, 1, 3.4, 44, 22, 0.66],
+    [0.14, 0.018, 1, 0.2, 36, 18, 0.58],
+    [0.40, 0.023, -1, 1.7, 40, 20, 0.62],
+    [0.66, 0.015, 1, 3.4, 44, 22, 0.66],
     [0.90, 0.021, -1, 5.1, 48, 24, 0.70],
   ];
 
   // 魚只在河面最寬、最確定的那一段活動。上游窄到螢幕上不足 10px，
   // 與其把折線修到完美，不如讓魚待在容錯大的地方——折線還有幾像素誤差也不會上岸。
-  const RIVER_FISH_PROGRESS_START = 0.18;
+  const RIVER_FISH_PROGRESS_START = 0.06;
   const RIVER_FISH_PROGRESS_END = 0.95;
   const RIVER_FISH_PROGRESS_SPAN = RIVER_FISH_PROGRESS_END - RIVER_FISH_PROGRESS_START;
 
@@ -352,9 +350,13 @@
           || !Number.isFinite(item.height) || !Number.isFinite(item.opacity) || item.width <= 0 || item.height <= 0) continue;
         const { nx, ny } = riverPoint(normalizeRiverFishProgress(item.progress));
         const [x, y] = coverPoint(w, h, nx, ny);
-        // 上游窄且遠，魚要跟著變小——否則延伸到上游時魚會比河還寬。
-        // 以河寬為景深比例尺，最下游 = 1.0。
-        const depth = riverHalfWidth(item.progress) / riverHalfWidth(RIVER_FISH_PROGRESS_END);
+        // 景深看的是「離觀眾多遠」，也就是 ny：越靠畫面下方越近、越大。
+        // 不能用河寬當比例尺——這條河中段最寬，但中段並不是離觀眾最近的地方。
+        const nyHere = riverPoint(item.progress).ny;
+        const nyNear = riverPoint(RIVER_FISH_PROGRESS_END).ny;
+        const nyFar = riverPoint(RIVER_FISH_PROGRESS_START).ny;
+        const t = nyNear === nyFar ? 1 : (nyHere - nyFar) / (nyNear - nyFar);
+        const depth = 0.55 + 0.45 * Math.max(0, Math.min(1, t));
         const drawnWidth = item.width * canvasScale * depth;
         const drawnHeight = item.height * canvasScale * depth;
         if (!Number.isFinite(drawnWidth) || !Number.isFinite(drawnHeight) || drawnWidth <= 0 || drawnHeight <= 0) continue;
