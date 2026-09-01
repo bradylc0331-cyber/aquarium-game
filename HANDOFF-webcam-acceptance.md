@@ -65,7 +65,8 @@
 
 **已完成並驗證過的：**
 
-- 177 條單元測試全綠（`npm test`）。
+- `npm test` 全綠（目前 193 條）。**條數會隨功能增減一直變，不要拿它當專案指紋**——
+  用 `ls display.html control.html src/movement.js` 與分支名判斷才可靠。
 - 掃描管線的端對端合成檢查 14/14（`node scripts/e2e-scan-check.js`）——但那是**合成**
   的影像，不是真的照片。
 - 存檔／還原 14 項檢查（`node scripts/persistence-check.js`）。

@@ -16,7 +16,7 @@
 > git remote -v                # 要看到 aquarium-game
 > git branch --show-current    # 要看到 2-5d-character-motion
 > ls display.html control.html src/movement.js   # 三個都要在
-> npm test                     # 要看到 177 條全綠
+> npm test                     # 全綠即可（條數常變，不要當指紋）
 > ```
 >
 > **這個資料夾裡沒有這個檔案就是走錯 repo，停下來問 Brady。** 別去猜「最接近的
@@ -151,7 +151,7 @@ git show 3e7ea6e -- src/scene.js display.html   # 看它原本怎麼接進畫面
 
 ```bash
 npm run serve      # http://localhost:8933，靜態檔案，不用編譯
-npm test           # 現在是 177 條
+npm test           # 全綠即可
 ```
 
 用 **Chrome** 開 <http://localhost:8933/display.html>。

@@ -17,6 +17,9 @@ const {
   drawSheep,
   drawBirdFlock,
   riverPoint,
+  riverHalfWidth,
+  RIVER_PATH,
+  RIVER_FISH_RANGE,
   riverTangentAngle,
   normalizeRiverFishProgress,
   createRiverFish,
@@ -521,6 +524,17 @@ test('動物偏好影格不可用時會退回另一個已載入的姿勢', () =>
   assert.deepEqual(sources, [walking, birdUp]);
 });
 
+
+// 河道幾何一律從 src/scene.js 匯出的常數推導。測試裡不要再抄任何座標數字——
+// 上一版就是把公式算出來的值抄成期望值，所以魚整段游在草地上時測試照樣全綠。
+const FISH_START = RIVER_FISH_RANGE.start;
+const FISH_END = RIVER_FISH_RANGE.end;
+const RIVER_NX = RIVER_PATH.map(([nx]) => nx);
+const RIVER_NY = RIVER_PATH.map(([, ny]) => ny);
+const NX_MIN = Math.min(...RIVER_NX), NX_MAX = Math.max(...RIVER_NX);
+const NY_MIN = Math.min(...RIVER_NY), NY_MAX = Math.max(...RIVER_NY);
+const inFishStretch = (v) => v >= FISH_START - 1e-12 && v <= FISH_END + 1e-12;
+
 test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
   const fish = createRiverFish();
   const { ctx, calls } = makeFakeCtx();
@@ -531,7 +545,7 @@ test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
 
   assert.equal(fish.length, 4);
   assert.equal(new Set(fish.map((item) => item.progress)).size, 4);
-  assert.ok(fish.every((item) => item.progress >= 0.48 && item.progress < 0.68));
+  assert.ok(fish.every((item) => inFishStretch(item.progress)));
   assert.equal(new Set(fish.map((item) => item.speed)).size, 4);
   assert.equal(new Set(fish.map((item) => item.phase)).size, 4);
   assert.ok(fish.every((item) => item.direction === 1 || item.direction === -1));
@@ -564,13 +578,17 @@ test('河流小魚依河道切線旋轉，逆流魚先旋轉再鏡像', () => {
 
   const rotations = calls.filter(([name]) => name === 'rotate').map(([, args]) => args[0]);
   assert.equal(rotations.length, 4);
+  // 期望值由「河道路徑本身」推導：取前後兩點，換算成螢幕像素方向再取角度。
+  // 不抄實作的算式——抄了就變成把實作重寫一次，實作錯了測試也跟著錯。
+  const scaleFor = (w, h) => Math.max(w / 1672, h / 941);
   for (let i = 0; i < fish.length; i++) {
     const p = normalizeRiverFishProgress(fish[i].progress);
-    const expected = Math.atan2(
-      0.245,
-      0.135 + 0.012 * 2 * Math.PI * Math.cos(2 * Math.PI * p),
-    );
-    assert.ok(Math.abs(rotations[i] - expected) < 1e-12);
+    const a = riverPoint(Math.max(FISH_START, p - 0.01));
+    const b = riverPoint(Math.min(FISH_END, p + 0.01));
+    const k = scaleFor(1280, 720);
+    const expected = Math.atan2((b.ny - a.ny) * 941 * k, (b.nx - a.nx) * 1672 * k);
+    assert.ok(Math.abs(rotations[i] - expected) < 1e-9,
+      `第 ${i} 隻魚的角度 ${rotations[i]} 與河道實際走向 ${expected} 不符`);
   }
 
   const reverseIndex = fish.findIndex((item) => item.direction < 0);
@@ -585,11 +603,52 @@ test('河流小魚依河道切線旋轉，逆流魚先旋轉再鏡像', () => {
   assert.equal(calls[reverseTranslate + 2][1][0], -1);
 });
 
+test('河道控制點是照背景插畫量出來的那一組，換背景圖必須重量', () => {
+  // 這是一組 golden 值。它守的是「有人改了河道座標卻沒重新對圖」——
+  //
+  // **它驗不到的事：這些座標到底有沒有對準畫上的河。**
+  // 那件事只有把魚畫在背景上看才驗得出來。上一版的測試全綠，魚卻整段游在
+  // 右岸草地上，就是因為當時的斷言只是把公式算出來的數字抄成期望值。
+  // 改動河道之後請截圖確認，不要只看測試綠燈。
+  assert.equal(RIVER_PATH.length, 10);
+  assert.deepEqual(RIVER_PATH, [
+    [0.493, 0.536, 0.0025],
+    [0.515, 0.567, 0.0035],
+    [0.538, 0.596, 0.0042],
+    [0.555, 0.624, 0.0050],
+    [0.568, 0.648, 0.0060],
+    [0.580, 0.672, 0.0075],
+    [0.609, 0.696, 0.0100],
+    [0.640, 0.717, 0.0140],
+    [0.671, 0.732, 0.0175],
+    [0.703, 0.748, 0.0195],
+  ]);
+  // 河道必須單調往右下、且越下游越寬，否則魚會倒退或忽大忽小
+  for (let i = 1; i < RIVER_PATH.length; i++) {
+    assert.ok(RIVER_PATH[i][0] > RIVER_PATH[i - 1][0], `控制點 ${i} 沒有往右`);
+    assert.ok(RIVER_PATH[i][1] > RIVER_PATH[i - 1][1], `控制點 ${i} 沒有往下`);
+    assert.ok(RIVER_PATH[i][2] >= RIVER_PATH[i - 1][2], `控制點 ${i} 的河寬變窄了`);
+  }
+});
+
+test('魚的活動河段落在河面最寬的下游，且整段都在河道帶內', () => {
+  // 上游窄到螢幕上不足 10px，折線只要差幾像素魚就上岸；下游寬，容錯大。
+  const startHalf = riverHalfWidth(FISH_START);
+  const endHalf = riverHalfWidth(FISH_END);
+  assert.ok(startHalf >= 0.008, `魚的上游端河寬只有 ${startHalf}，太窄`);
+  assert.ok(endHalf > startHalf, '下游應該比上游寬');
+  const fish = createRiverFish();
+  for (let frame = 0; frame < 3000; frame++) {
+    updateRiverFish(fish, 1 / 60);
+    for (const item of fish) assert.ok(inFishStretch(item.progress));
+  }
+});
+
 test('河道曲線的多個正規化點都落在河面範圍', () => {
   for (const progress of [0, 0.08, 0.2, 0.35, 0.5, 0.7, 0.85, 1]) {
     const { nx, ny } = riverPoint(progress);
-    assert.ok(nx >= 0.54 && nx <= 0.71, `progress=${progress} 的 nx=${nx}`);
-    assert.ok(ny >= 0.505 && ny <= 0.75, `progress=${progress} 的 ny=${ny}`);
+    assert.ok(nx >= NX_MIN - 1e-9 && nx <= NX_MAX + 1e-9, `progress=${progress} 的 nx=${nx}`);
+    assert.ok(ny >= NY_MIN - 1e-9 && ny <= NY_MAX + 1e-9, `progress=${progress} 的 ny=${ny}`);
   }
 });
 
@@ -599,34 +658,59 @@ test('河流小魚長時間更新後仍保持有限狀態並貼著河道', () =>
   for (let frame = 0; frame < 5000; frame++) updateRiverFish(fish, 0.05);
 
   for (const item of fish) {
-    assert.ok(Number.isFinite(item.progress) && item.progress >= 0.48 && item.progress < 0.68);
+    assert.ok(Number.isFinite(item.progress) && inFishStretch(item.progress));
     assert.ok(Number.isFinite(item.phase));
     const { nx, ny } = riverPoint(item.progress);
-    assert.ok(nx >= 0.54 && nx <= 0.71);
-    assert.ok(ny >= 0.6226 && ny < 0.6717);
+    assert.ok(nx >= riverPoint(FISH_START).nx - 1e-9 && nx <= riverPoint(FISH_END).nx + 1e-9);
+    assert.ok(ny >= riverPoint(FISH_START).ny - 1e-9 && ny <= riverPoint(FISH_END).ny + 1e-9);
   }
 });
 
-test('河流小魚大步長更新以 0.20 安全河段包回，而不是以 1.0 包回', () => {
+test('魚游到河段兩端要折返，不能繞回另一端——繞回就是憑空消失又出現', () => {
+  // 分頁被瀏覽器背景節流之後回來，一次 dt 可能跨過整段河，所以大步長也要正確折返。
   const forward = createRiverFish()[0];
-  forward.progress = 0.67;
+  forward.progress = FISH_END - 0.01;
   forward.speed = 0.02;
   forward.direction = 1;
   updateRiverFish([forward], 1);
-  assert.ok(Math.abs(forward.progress - 0.49) < 1e-12);
+  assert.ok(inFishStretch(forward.progress), `折返後 ${forward.progress} 跑出河段`);
+  assert.equal(forward.direction, -1, '撞到下游端點要轉頭往上游');
+  assert.ok(forward.progress < FISH_END, '折返後不該還黏在端點');
 
   const reverse = createRiverFish()[1];
-  reverse.progress = 0.49;
+  reverse.progress = FISH_START + 0.01;
   reverse.speed = 0.02;
   reverse.direction = -1;
   updateRiverFish([reverse], 1);
-  assert.ok(Math.abs(reverse.progress - 0.67) < 1e-12);
+  assert.ok(inFishStretch(reverse.progress));
+  assert.equal(reverse.direction, 1, '撞到上游端點要轉頭往下游');
 });
 
-test('河流小魚進度會包回下游水面，繪製也不接受上游或河岸進度', () => {
-  assert.equal(normalizeRiverFishProgress(0.48), 0.48);
-  assert.ok(normalizeRiverFishProgress(0.68) >= 0.48 && normalizeRiverFishProgress(0.68) < 0.68);
-  assert.ok(normalizeRiverFishProgress(-0.05) >= 0.48 && normalizeRiverFishProgress(-0.05) < 0.68);
+test('魚的位置永遠連續——長時間更新中不得出現任何瞬移', () => {
+  // 這條是「不要憑空出現又消失」的直接守則。繞回式的實作會在端點跳一整段，
+  // 這裡就會紅。
+  const fish = createRiverFish();
+  const dt = 1 / 60;
+  let previous = fish.map((item) => item.progress);
+  for (let frame = 0; frame < 20000; frame++) {
+    updateRiverFish(fish, dt);
+    fish.forEach((item, i) => {
+      const moved = Math.abs(item.progress - previous[i]);
+      // 一幀最多只能移動「速度 × dt」的量，折返時只會更小
+      assert.ok(moved <= item.speed * dt + 1e-9,
+        `第 ${frame} 幀第 ${i} 隻魚瞬移了 ${moved.toFixed(4)}`);
+      previous[i] = item.progress;
+    });
+  }
+});
+
+test('注入的河岸／上游進度會被夾回河段，繪製也不接受', () => {
+  assert.equal(normalizeRiverFishProgress(FISH_START), FISH_START);
+  assert.equal(normalizeRiverFishProgress(FISH_END), FISH_END);
+  // 夾住，不是繞回：超出下游端就停在下游端，不會跑到上游去
+  assert.equal(normalizeRiverFishProgress(FISH_END + 0.2), FISH_END);
+  assert.equal(normalizeRiverFishProgress(-0.05), FISH_START);
+  assert.equal(normalizeRiverFishProgress(Number.NaN), FISH_START);
 
   const fish = createRiverFish();
   fish[0].progress = 0.05;
@@ -634,8 +718,8 @@ test('河流小魚進度會包回下游水面，繪製也不接受上游或河�
   fish[0].phase = 0;
   fish[1].phase = 0;
   updateRiverFish(fish.slice(0, 2), 0);
-  assert.ok(fish[0].progress >= 0.48 && fish[0].progress < 0.68);
-  assert.ok(fish[1].progress >= 0.48 && fish[1].progress < 0.68);
+  assert.ok(inFishStretch(fish[0].progress));
+  assert.ok(inFishStretch(fish[1].progress));
 
   const { ctx, calls } = makeFakeCtx();
   const image = { id: 'river-fish', width: 1024, height: 1024 };
@@ -647,11 +731,11 @@ test('河流小魚進度會包回下游水面，繪製也不接受上游或河�
     const scale = Math.max(1280 / 1672, 720 / 941);
     const expectedY = (720 - 941 * scale) / 2 + ny * 941 * scale;
     assert.ok(Math.abs(translates[i][1] - expectedY) < 1e-9);
-    assert.ok(ny >= 0.6226 && ny < 0.6717);
+    assert.ok(ny >= riverPoint(FISH_START).ny - 1e-9 && ny <= riverPoint(FISH_END).ny + 1e-9);
   }
 });
 
-test('河流小魚繪製前會獨立把注入的上游進度包回下游水面', () => {
+test('繪製前會獨立把注入的越界進度夾回河段', () => {
   const fish = createRiverFish().slice(0, 2).map((item, index) => ({
     ...item,
     progress: index === 0 ? 0.05 : 0.95,
@@ -668,7 +752,7 @@ test('河流小魚繪製前會獨立把注入的上游進度包回下游水面',
     const progress = normalizeRiverFishProgress(fish[i].progress);
     const { ny } = riverPoint(progress);
     const expectedY = (720 - 941 * scale) / 2 + ny * 941 * scale;
-    assert.ok(ny >= 0.6226 && ny < 0.6717);
+    assert.ok(ny >= riverPoint(FISH_START).ny - 1e-9 && ny <= riverPoint(FISH_END).ny + 1e-9);
     assert.ok(Math.abs(translates[i][1] - expectedY) < 1e-9);
   }
 });

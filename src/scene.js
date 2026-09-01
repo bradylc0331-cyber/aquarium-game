@@ -161,12 +161,52 @@
   }
 
   // 河流上的所有動態元素共用這條原圖座標曲線，cover 裁切後仍能貼著河面。
-  function riverPoint(progress) {
+  // 河道中心線與河寬：照 assets/backgrounds/bible-world.png **量出來**的控制點，
+  // 座標是背景原圖的比例（0~1）。**換背景圖一定要重量。**
+  //
+  // 舊版是一條手寫的正弦公式，往右的斜率只有真正河道的一半
+  // （真實 dnx/dny ≈ 1.05，公式是 0.55），所以它從城鎮那邊斜切過真正的河，
+  // 中段整條落在右岸草地上——魚就在草地上游。2026-09-01 實機發現。
+  //
+  // 當時的測試沒抓到，因為它斷言的是「nx 落在 0.54~0.71」這種由錯誤公式反推的
+  // 數字盒，而不是「這些點在圖上是不是水」。這種測試永遠不會紅。
+  const RIVER_PATH = [
+    // [nx, ny, halfWidth]——上游窄、下游寬
+    [0.493, 0.536, 0.0025],
+    [0.515, 0.567, 0.0035],
+    [0.538, 0.596, 0.0042],
+    [0.555, 0.624, 0.0050],
+    [0.568, 0.648, 0.0060],
+    [0.580, 0.672, 0.0075],
+    [0.609, 0.696, 0.0100],
+    [0.640, 0.717, 0.0140],
+    [0.671, 0.732, 0.0175],
+    [0.703, 0.748, 0.0195],
+  ];
+
+  // progress 0~1 沿著折線等分內插（每段長度相近，不另外做弧長參數化）。
+  function riverSample(progress) {
     const p = normalizedProgress(progress);
+    const span = RIVER_PATH.length - 1;
+    const scaled = Math.min(span - 1e-9, p * span);
+    const i = Math.floor(scaled);
+    const t = scaled - i;
+    const a = RIVER_PATH[i];
+    const b = RIVER_PATH[i + 1];
     return {
-      nx: 0.555 + p * 0.135 + Math.sin(p * Math.PI * 2) * 0.012,
-      ny: 0.505 + p * 0.245,
+      nx: a[0] + (b[0] - a[0]) * t,
+      ny: a[1] + (b[1] - a[1]) * t,
+      halfWidth: a[2] + (b[2] - a[2]) * t,
     };
+  }
+
+  function riverPoint(progress) {
+    const { nx, ny } = riverSample(progress);
+    return { nx, ny };
+  }
+
+  function riverHalfWidth(progress) {
+    return riverSample(progress).halfWidth;
   }
 
   // 沿著背景原圖中央的河道畫短波光；位置使用原圖比例，cover 裁切時仍能貼著河面。
@@ -179,7 +219,7 @@
     for (let i = 0; i < 12; i++) {
       const p = normalizedProgress(i / 12 + t * 0.035);
       const { nx, ny } = riverPoint(p);
-      const halfWidth = 0.006 + p * 0.022;
+      const halfWidth = riverHalfWidth(p);
       const [x1, y1] = coverPoint(w, h, nx - halfWidth, ny);
       const [xm, ym] = coverPoint(w, h, nx, ny + 0.0025);
       const [x2, y2] = coverPoint(w, h, nx + halfWidth, ny);
@@ -192,27 +232,50 @@
   }
 
   const RIVER_FISH_LAYOUT = [
-    [0.50, 0.018, 1, 0.2, 36, 18, 0.58],
-    [0.55, 0.023, -1, 1.7, 40, 20, 0.62],
-    [0.60, 0.015, 1, 3.4, 44, 22, 0.66],
-    [0.65, 0.021, -1, 5.1, 48, 24, 0.70],
+    [0.67, 0.018, 1, 0.2, 36, 18, 0.58],
+    [0.74, 0.023, -1, 1.7, 40, 20, 0.62],
+    [0.81, 0.015, 1, 3.4, 44, 22, 0.66],
+    [0.88, 0.021, -1, 5.1, 48, 24, 0.70],
   ];
 
-  const RIVER_FISH_PROGRESS_START = 0.48;
-  const RIVER_FISH_PROGRESS_END = 0.68;
+  // 魚只在河面最寬、最確定的那一段活動。上游窄到螢幕上不足 10px，
+  // 與其把折線修到完美，不如讓魚待在容錯大的地方——折線還有幾像素誤差也不會上岸。
+  const RIVER_FISH_PROGRESS_START = 0.64;
+  const RIVER_FISH_PROGRESS_END = 0.92;
   const RIVER_FISH_PROGRESS_SPAN = RIVER_FISH_PROGRESS_END - RIVER_FISH_PROGRESS_START;
 
+  // 把進度收進安全河段。**用夾住，不是繞回**——繞回會讓游到下游端點的魚
+  // 瞬間傳送回上游，畫面上就是憑空消失又出現。魚到端點要轉頭（見 reflectProgress）。
   function normalizeRiverFishProgress(progress) {
     if (!Number.isFinite(progress)) return RIVER_FISH_PROGRESS_START;
-    const wrapped = (progress - RIVER_FISH_PROGRESS_START) % RIVER_FISH_PROGRESS_SPAN;
-    return RIVER_FISH_PROGRESS_START + (wrapped < 0 ? wrapped + RIVER_FISH_PROGRESS_SPAN : wrapped);
+    if (progress < RIVER_FISH_PROGRESS_START) return RIVER_FISH_PROGRESS_START;
+    if (progress > RIVER_FISH_PROGRESS_END) return RIVER_FISH_PROGRESS_END;
+    return progress;
   }
+
+  // 碰到河段兩端就折返，游動因此是連續的：位置不跳、朝向跟著翻。
+  // 迴圈是為了容忍一次 dt 就跨過整段的大步長（分頁被背景節流後回來會發生）。
+  function reflectProgress(value, direction) {
+    let p = value;
+    let dir = direction;
+    for (let guard = 0; guard < 8; guard++) {
+      if (p > RIVER_FISH_PROGRESS_END) { p = 2 * RIVER_FISH_PROGRESS_END - p; dir = -1; }
+      else if (p < RIVER_FISH_PROGRESS_START) { p = 2 * RIVER_FISH_PROGRESS_START - p; dir = 1; }
+      else break;
+    }
+    return { progress: normalizeRiverFishProgress(p), direction: dir };
+  }
+
+  // 背景原圖的長寬比。nx/ny 是**比例**座標，兩軸的實際像素尺度不同，
+  // 算螢幕上的角度一定要各自乘回去，否則魚會比河道更「往下栽」。
+  const BG_ASPECT = 1672 / 941;
 
   function riverTangentAngle(progress) {
     const p = normalizeRiverFishProgress(progress);
-    const dx = 0.135 + 0.012 * Math.PI * 2 * Math.cos(Math.PI * 2 * p);
-    const dy = 0.245;
-    return Math.atan2(dy, dx);
+    const step = 0.01;
+    const a = riverPoint(Math.max(RIVER_FISH_PROGRESS_START, p - step));
+    const b = riverPoint(Math.min(RIVER_FISH_PROGRESS_END, p + step));
+    return Math.atan2(b.ny - a.ny, (b.nx - a.nx) * BG_ASPECT);
   }
 
   // Image 2 母圖是 1:1 方形；只取魚身內容區，排除透明 padding 與 halo。
@@ -234,7 +297,9 @@
         const progressStep = item.speed * dt;
         const phaseStep = (0.8 + item.speed * 16) * dt;
         if (!Number.isFinite(progressStep) || !Number.isFinite(phaseStep)) continue;
-        item.progress = normalizeRiverFishProgress(currentProgress + item.direction * progressStep);
+        const next = reflectProgress(currentProgress + item.direction * progressStep, item.direction);
+        item.progress = next.progress;
+        item.direction = next.direction;
         item.phase = normalizedProgress((item.phase / (Math.PI * 2)) + phaseStep / (Math.PI * 2)) * Math.PI * 2;
       } catch (_) {
         // 壞掉的外部狀態不能中斷同一幀其他魚的更新。
@@ -616,7 +681,8 @@
 
   const api = {
     createBubbles, updateBubbles, drawBubbles, drawBackground, drawRiverFlow, drawForeground,
-    riverPoint, riverTangentAngle, createRiverFish, updateRiverFish, drawRiverFish, normalizeRiverFishProgress,
+    riverPoint, riverHalfWidth, riverTangentAngle, RIVER_PATH, reflectProgress,
+    RIVER_FISH_RANGE: { start: RIVER_FISH_PROGRESS_START, end: RIVER_FISH_PROGRESS_END }, createRiverFish, updateRiverFish, drawRiverFish, normalizeRiverFishProgress,
     gustStrength, drawCanopySway, createSheepFlock, sheepScaleForY, updateSheepFlock,
     createBirdFlock, updateBirdFlock, rasterizeRuntimeSprite, drawSheep, drawBirdFlock,
   };
