@@ -579,3 +579,17 @@ test('河流小魚的 ctx capability getter 拋錯時會安全略過', () => {
   assert.doesNotThrow(() => drawRiverFish(throwingSave, fish, 1280, 720, 1.2, images));
   assert.doesNotThrow(() => drawRiverFish(throwingDrawImage, fish, 1280, 720, 1.2, images));
 });
+
+test('河流小魚素材 getter 拋錯時安全略過且不繪製', () => {
+  const fish = createRiverFish();
+  const { ctx, calls } = makeFakeCtx();
+  const images = new Proxy({}, {
+    get(_target, property) {
+      if (property === 'riverFish') throw new Error('unavailable image');
+      return undefined;
+    },
+  });
+
+  assert.doesNotThrow(() => drawRiverFish(ctx, fish, 1280, 720, 3, images));
+  assert.equal(calls.length, 0);
+});
