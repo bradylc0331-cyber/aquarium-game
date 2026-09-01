@@ -192,11 +192,21 @@
   }
 
   const RIVER_FISH_LAYOUT = [
-    [0.07, 0.018, 1, 0.2, 36, 18, 0.58],
-    [0.31, 0.023, -1, 1.7, 40, 20, 0.62],
-    [0.58, 0.015, 1, 3.4, 44, 22, 0.66],
-    [0.84, 0.021, -1, 5.1, 48, 24, 0.70],
+    [0.52, 0.018, 1, 0.2, 36, 18, 0.58],
+    [0.60, 0.023, -1, 1.7, 40, 20, 0.62],
+    [0.68, 0.015, 1, 3.4, 44, 22, 0.66],
+    [0.76, 0.021, -1, 5.1, 48, 24, 0.70],
   ];
+
+  const RIVER_FISH_PROGRESS_START = 0.50;
+  const RIVER_FISH_PROGRESS_END = 0.80;
+  const RIVER_FISH_PROGRESS_SPAN = RIVER_FISH_PROGRESS_END - RIVER_FISH_PROGRESS_START;
+
+  function normalizeRiverFishProgress(progress) {
+    if (!Number.isFinite(progress)) return RIVER_FISH_PROGRESS_START;
+    const wrapped = (progress - RIVER_FISH_PROGRESS_START) % RIVER_FISH_PROGRESS_SPAN;
+    return RIVER_FISH_PROGRESS_START + (wrapped < 0 ? wrapped + RIVER_FISH_PROGRESS_SPAN : wrapped);
+  }
 
   // Image 2 母圖是 1:1 方形；只取魚身內容區，排除透明 padding 與 halo。
   const RIVER_FISH_SPRITE_CROP = Object.freeze({ x: 0.20, y: 0.34, width: 0.60, height: 0.28 });
@@ -216,7 +226,7 @@
         const progressStep = item.speed * dt;
         const phaseStep = (0.8 + item.speed * 16) * dt;
         if (!Number.isFinite(progressStep) || !Number.isFinite(phaseStep)) continue;
-        item.progress = normalizedProgress(item.progress + item.direction * (progressStep % 1));
+        item.progress = normalizeRiverFishProgress(item.progress + item.direction * (progressStep % 1));
         item.phase = normalizedProgress((item.phase / (Math.PI * 2)) + phaseStep / (Math.PI * 2)) * Math.PI * 2;
       } catch (_) {
         // 壞掉的外部狀態不能中斷同一幀其他魚的更新。
@@ -261,7 +271,7 @@
       try {
         if (!item || !Number.isFinite(item.progress) || !Number.isFinite(item.phase) || !Number.isFinite(item.width)
           || !Number.isFinite(item.height) || !Number.isFinite(item.opacity) || item.width <= 0 || item.height <= 0) continue;
-        const { nx, ny } = riverPoint(item.progress);
+        const { nx, ny } = riverPoint(normalizeRiverFishProgress(item.progress));
         const [x, y] = coverPoint(w, h, nx, ny);
         const drawnWidth = item.width * canvasScale;
         const drawnHeight = item.height * canvasScale;
@@ -597,7 +607,7 @@
 
   const api = {
     createBubbles, updateBubbles, drawBubbles, drawBackground, drawRiverFlow, drawForeground,
-    riverPoint, createRiverFish, updateRiverFish, drawRiverFish,
+    riverPoint, createRiverFish, updateRiverFish, drawRiverFish, normalizeRiverFishProgress,
     gustStrength, drawCanopySway, createSheepFlock, sheepScaleForY, updateSheepFlock,
     createBirdFlock, updateBirdFlock, rasterizeRuntimeSprite, drawSheep, drawBirdFlock,
   };

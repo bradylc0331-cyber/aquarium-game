@@ -17,6 +17,7 @@ const {
   drawSheep,
   drawBirdFlock,
   riverPoint,
+  normalizeRiverFishProgress,
   createRiverFish,
   updateRiverFish,
   drawRiverFish,
@@ -529,6 +530,7 @@ test('河流小魚固定四隻，且各自有不同的游動狀態', () => {
 
   assert.equal(fish.length, 4);
   assert.equal(new Set(fish.map((item) => item.progress)).size, 4);
+  assert.ok(fish.every((item) => item.progress >= 0.50 && item.progress < 0.80));
   assert.equal(new Set(fish.map((item) => item.speed)).size, 4);
   assert.equal(new Set(fish.map((item) => item.phase)).size, 4);
   assert.ok(fish.every((item) => item.direction === 1 || item.direction === -1));
@@ -566,11 +568,39 @@ test('河流小魚長時間更新後仍保持有限狀態並貼著河道', () =>
   for (let frame = 0; frame < 5000; frame++) updateRiverFish(fish, 0.05);
 
   for (const item of fish) {
-    assert.ok(Number.isFinite(item.progress) && item.progress >= 0 && item.progress < 1);
+    assert.ok(Number.isFinite(item.progress) && item.progress >= 0.50 && item.progress < 0.80);
     assert.ok(Number.isFinite(item.phase));
     const { nx, ny } = riverPoint(item.progress);
     assert.ok(nx >= 0.54 && nx <= 0.71);
-    assert.ok(ny >= 0.505 && ny <= 0.75);
+    assert.ok(ny >= 0.6275 && ny < 0.701);
+  }
+});
+
+test('河流小魚進度會包回下游水面，繪製也不接受上游或河岸進度', () => {
+  assert.equal(normalizeRiverFishProgress(0.50), 0.50);
+  assert.ok(normalizeRiverFishProgress(0.80) >= 0.50 && normalizeRiverFishProgress(0.80) < 0.80);
+  assert.ok(normalizeRiverFishProgress(-0.05) >= 0.50 && normalizeRiverFishProgress(-0.05) < 0.80);
+
+  const fish = createRiverFish();
+  fish[0].progress = 0.05;
+  fish[1].progress = 0.95;
+  fish[0].phase = 0;
+  fish[1].phase = 0;
+  updateRiverFish(fish.slice(0, 2), 0);
+  assert.ok(fish[0].progress >= 0.50 && fish[0].progress < 0.80);
+  assert.ok(fish[1].progress >= 0.50 && fish[1].progress < 0.80);
+
+  const { ctx, calls } = makeFakeCtx();
+  const image = { id: 'river-fish', width: 1024, height: 1024 };
+  drawRiverFish(ctx, fish.slice(0, 2), 1280, 720, 0, { riverFish: image });
+  const translates = calls.filter(([name]) => name === 'translate').map(([, args]) => args);
+  assert.equal(translates.length, 2);
+  for (let i = 0; i < translates.length; i++) {
+    const { ny } = riverPoint(normalizeRiverFishProgress(i === 0 ? 0.05 : 0.95));
+    const scale = Math.max(1280 / 1672, 720 / 941);
+    const expectedY = (720 - 941 * scale) / 2 + ny * 941 * scale;
+    assert.ok(Math.abs(translates[i][1] - expectedY) < 1e-9);
+    assert.ok(ny >= 0.6275 && ny < 0.701);
   }
 });
 
