@@ -54,6 +54,7 @@
   const bubbles = AquariumScene.createBubbles(canvas.width, canvas.height, 40);
   const sheepFlock = AquariumScene.createSheepFlock(canvas.width, canvas.height);
   const birdFlock = AquariumScene.createBirdFlock(canvas.width, canvas.height);
+  const riverFish = AquariumScene.createRiverFish();
   // 可行走區在每一幀重算（視窗會被縮放）。
   let walkable = Movement.getWalkableArea(canvas.width, canvas.height);
   // 天空帶：會飛的角色在這裡飄，完全不跟地面角色搶位子。
@@ -103,6 +104,9 @@
     pendingCount: () => manager.pendingCount,
     positions: () => manager.renderable.map((c) => ({ id: c.artworkId, x: c.x, baseY: c.baseY })),
     flockCounts: () => ({ sheep: sheepFlock.length, birds: birdFlock.length }),
+    riverFishPositions: () => riverFish.map((fish) => ({
+      progress: fish.progress, direction: fish.direction, phase: fish.phase,
+    })),
     sheepPositions: () => sheepFlock.map((sheep) => ({ x: sheep.x, baseY: sheep.baseY, mode: sheep.mode })),
     birdPositions: () => birdFlock.map((bird) => ({ x: bird.x, y: bird.y, phase: bird.phase })),
     // 飛行角色要能單獨檢查：截圖看不出「頭頂被畫面上緣切掉幾像素」，
@@ -260,9 +264,11 @@
 
     AquariumScene.updateSheepFlock(sheepFlock, dt, walkable, walkers);
     AquariumScene.updateBirdFlock(birdFlock, dt, canvas.width, canvas.height);
+    AquariumScene.updateRiverFish(riverFish, dt);
     AquariumScene.updateBubbles(bubbles, dt, canvas.width, canvas.height);
 
     AquariumScene.drawBackground(ctx, canvas.width, canvas.height, elapsed);
+    AquariumScene.drawRiverFish(ctx, riverFish, canvas.width, canvas.height, elapsed);
     AquariumScene.drawCanopySway(ctx, canvas.width, canvas.height, elapsed);
     AquariumScene.drawBubbles(ctx, bubbles);
     AquariumScene.drawBirdFlock(ctx, birdFlock, elapsed, canvas.height);
