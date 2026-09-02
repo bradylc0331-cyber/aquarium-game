@@ -117,3 +117,70 @@ test('偏移搜尋不得製造假辨識：沒有 QR 或整片白就要回 null',
     '紙放反時不該猜出一個人物',
   );
 });
+
+// ---------------------------------------------------------------------------
+// 2026-09-02 實機（C270、1280x960、約拿那張紙）量到的東西：
+// QR 的三個定位圖案落在比 QR_AREA 假設的位置偏 (+7.2, +5.0) canonical px 的地方，
+// 而且垂直方向被壓縮約 8%。SEARCH_OFFSETS 最遠只到 ±3.0px，所以怎麼搜都搜不到，
+// 七位人物的分數全部擠在 0.42~0.46（亂猜是 0.5）。
+//
+// 成因還沒定案（紙前緣沒貼平的可能性最大），但無論成因是什麼，
+// 解碼器都不該假設 QR 一定落在標稱位置——它應該自己去找。
+// 鑑識過程與資料見 scripts/qr-forensics/。
+// ---------------------------------------------------------------------------
+
+// 除了平移，還能個別縮放 X/Y。scaleX/scaleY 模擬的是「拉正後 QR 被壓扁」，
+// 那是單純的平移搜尋救不回來的。
+function sheetWithQr(id, { offsetX = 0, offsetY = 0, scaleX = 1, scaleY = 1 } = {}) {
+  const data = new Uint8ClampedArray(CANVAS_W * CANVAS_H * 4).fill(255);
+  const matrix = matrixForText(`BIBLE:${id.toUpperCase()}`);
+  const total = SIZE + QUIET * 2;
+  const moduleSize = QR_AREA.size / total;
+  const mx = moduleSize * scaleX;
+  const my = moduleSize * scaleY;
+  for (let row = 0; row < SIZE; row++) {
+    for (let col = 0; col < SIZE; col++) {
+      if (!matrix[row][col]) continue;
+      const x0 = QR_AREA.x + offsetX + (col + QUIET) * mx;
+      const y0 = QR_AREA.y + offsetY + (row + QUIET) * my;
+      for (let y = Math.floor(y0); y < Math.ceil(y0 + my); y++) {
+        for (let x = Math.floor(x0); x < Math.ceil(x0 + mx); x++) {
+          if (x < 0 || y < 0 || x >= CANVAS_W || y >= CANVAS_H) continue;
+          const i = (y * CANVAS_W + x) * 4;
+          data[i] = data[i + 1] = data[i + 2] = 12;
+        }
+      }
+    }
+  }
+  return { width: CANVAS_W, height: CANVAS_H, data };
+}
+
+test('QR 落在標稱位置外 7px（實機實測值）仍要讀得出來', () => {
+  const image = sheetWithQr('jonah', { offsetX: 7.2, offsetY: 5.0 });
+  const result = identify(image, QR_AREA, ENTRIES);
+  assert.ok(result, '實機那組偏移讀不到');
+  assert.equal(result.id, 'jonah');
+});
+
+test('QR 同時偏移又被壓扁（實機實測：垂直 0.92 倍）仍要讀得出來', () => {
+  const image = sheetWithQr('jonah', { offsetX: 7.2, offsetY: 5.0, scaleY: 0.92 });
+  const result = identify(image, QR_AREA, ENTRIES);
+  assert.ok(result, '偏移加壓扁讀不到');
+  assert.equal(result.id, 'jonah');
+});
+
+test('七位人物在實機那組偏移下都要認對，不能認錯人', () => {
+  for (const entry of ENTRIES) {
+    const image = sheetWithQr(entry.id, { offsetX: 7.2, offsetY: 5.0, scaleY: 0.94 });
+    const result = identify(image, QR_AREA, ENTRIES);
+    assert.ok(result, `${entry.id} 讀不到`);
+    assert.equal(result.id, entry.id, `${entry.id} 被認成 ${result.id}`);
+  }
+});
+
+test('偏到離譜的地方（超出 QR 區一大截）要回 null，不要硬湊', () => {
+  // 找定位圖案不代表可以在整張紙上亂找。偏 40px 已經不是誤差而是紙放錯了，
+  // 這時候寧可讀不到，也不要認錯人。
+  const image = sheetWithQr('jonah', { offsetX: 60, offsetY: 40 });
+  assert.equal(identify(image, QR_AREA, ENTRIES), null);
+});

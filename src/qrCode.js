@@ -235,7 +235,232 @@
     return best;
   }
 
+  // ---------------------------------------------------------------------------
+  // 固定位置取樣的極限：2026-09-02 實機量到 QR 其實落在標稱位置外 (+7.2, +5.0) px，
+  // 垂直方向還被壓縮 8%。上面的 SEARCH_OFFSETS 最遠只到 ±3.0px，怎麼搜都搜不到，
+  // 七位人物分數全部擠在 0.42~0.46（亂猜是 0.5）。成因還沒定案，
+  // 但解碼器不該賭 QR 一定在標稱位置——它應該自己去找。
+  //
+  // 找法：QR 的三個定位圖案（finder pattern）本來就是為了被找到而設計的。
+  // 它們四周有 1 個模組寬的分隔白邊，所以在二值化後是三個乾淨、獨立、
+  // 邊長 7 個模組、填充率約 0.5 的方形黑塊。找到三個就能直接定出
+  // 取樣格線的原點、兩軸方向與每軸的模組大小——偏移與壓扁一次解決。
+  //
+  // 找不到就退回上面那條固定位置的路徑，所以只會變好，不會退步。
+  // ---------------------------------------------------------------------------
+
+  function regionLuma(imageData, x0, y0, w, h) {
+    const luma = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = ((y + y0) * imageData.width + (x + x0)) * 4;
+        luma[y * w + x] = imageData.data[i] * 0.299 + imageData.data[i + 1] * 0.587 + imageData.data[i + 2] * 0.114;
+      }
+    }
+    return luma;
+  }
+
+  // Otsu：不挑固定門檻，讓現場的照明自己決定黑白的分界。
+  // 回傳的 t 的語意是「亮度 <= t 算暗」——純黑白的合成畫面會回傳剛好等於黑色的值，
+  // 用 < 比較會把整張圖判成亮的，一個元件都找不到。
+  function otsuThreshold(luma) {
+    const hist = new Array(256).fill(0);
+    for (const v of luma) hist[Math.max(0, Math.min(255, Math.round(v)))]++;
+    let sum = 0;
+    for (let i = 0; i < 256; i++) sum += i * hist[i];
+    let sumB = 0, countB = 0, best = -1, threshold = 128;
+    for (let t = 0; t < 256; t++) {
+      countB += hist[t];
+      if (!countB) continue;
+      const countF = luma.length - countB;
+      if (!countF) break;
+      sumB += t * hist[t];
+      const between = countB * countF * ((sumB / countB) - ((sum - sumB) / countF)) ** 2;
+      if (between > best) { best = between; threshold = t; }
+    }
+    return threshold;
+  }
+
+  function darkComponents(luma, w, h, threshold) {
+    const label = new Int32Array(w * h).fill(-1);
+    const comps = [];
+    const stack = [];
+    for (let seed = 0; seed < w * h; seed++) {
+      if (luma[seed] > threshold || label[seed] >= 0) continue;
+      const id = comps.length;
+      label[seed] = id;
+      stack.length = 0;
+      stack.push(seed);
+      let n = 0, sx = 0, sy = 0, minX = w, maxX = -1, minY = h, maxY = -1;
+      while (stack.length) {
+        const p = stack.pop();
+        const px = p % w, py = (p - px) / w;
+        n++; sx += px; sy += py;
+        if (px < minX) minX = px;
+        if (px > maxX) maxX = px;
+        if (py < minY) minY = py;
+        if (py > maxY) maxY = py;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const qx = px + dx, qy = py + dy;
+            if (qx < 0 || qy < 0 || qx >= w || qy >= h) continue;
+            const q = qy * w + qx;
+            if (luma[q] <= threshold && label[q] < 0) { label[q] = id; stack.push(q); }
+          }
+        }
+      }
+      comps.push({ n, cx: sx / n, cy: sy / n, w: maxX - minX + 1, h: maxY - minY + 1 });
+    }
+    return comps;
+  }
+
+  // 三個定位圖案應該是等腰直角三角形的三個頂點，兩股長 14 個模組。
+  // 除了大小、方正度、填充率，還要過這一關，才不會把旁邊的中文字當成定位圖案。
+  function pickFinderTriple(candidates, moduleSize) {
+    const expectedLeg = 14 * moduleSize;
+    let best = null;
+    for (let a = 0; a < candidates.length; a++) {
+      for (let b = 0; b < candidates.length; b++) {
+        for (let c = b + 1; c < candidates.length; c++) {
+          if (a === b || a === c) continue;
+          const corner = candidates[a];
+          const v1 = [candidates[b].cx - corner.cx, candidates[b].cy - corner.cy];
+          const v2 = [candidates[c].cx - corner.cx, candidates[c].cy - corner.cy];
+          const l1 = Math.hypot(v1[0], v1[1]);
+          const l2 = Math.hypot(v2[0], v2[1]);
+          if (!l1 || !l2) continue;
+          if (Math.abs(l1 - expectedLeg) > expectedLeg * 0.2) continue;
+          if (Math.abs(l2 - expectedLeg) > expectedLeg * 0.2) continue;
+          const perpendicular = Math.abs((v1[0] * v2[0] + v1[1] * v2[1]) / (l1 * l2));
+          const isoceles = Math.abs(l1 - l2) / ((l1 + l2) / 2);
+          const error = perpendicular + isoceles;
+          if (error > 0.25) continue;
+          // 影像座標 y 朝下，tl->tr->bl 的外積為正
+          const cross = v1[0] * v2[1] - v1[1] * v2[0];
+          const tr = cross > 0 ? candidates[b] : candidates[c];
+          const bl = cross > 0 ? candidates[c] : candidates[b];
+          if (!best || error < best.error) {
+            best = { error, tl: [corner.cx, corner.cy], tr: [tr.cx, tr.cy], bl: [bl.cx, bl.cy] };
+          }
+        }
+      }
+    }
+    return best;
+  }
+
+  function locateFinders(imageData, area) {
+    const moduleSize = area.size / (SIZE + QUIET * 2);
+    // 搜尋範圍只比 QR 區大一圈。放太寬會開始把紙上其他東西當候選，
+    // 而且「紙放反」這種情況本來就該讀不到，不該讓它有機會在整張紙上找。
+    const margin = Math.round(area.size * 0.35);
+    const x0 = Math.max(0, Math.round(area.x - margin));
+    const y0 = Math.max(0, Math.round(area.y - margin));
+    const x1 = Math.min(imageData.width - 1, Math.round(area.x + area.size + margin));
+    const y1 = Math.min(imageData.height - 1, Math.round(area.y + area.size + margin));
+    const w = x1 - x0 + 1, h = y1 - y0 + 1;
+    if (w < area.size || h < area.size) return null;
+
+    const luma = regionLuma(imageData, x0, y0, w, h);
+    let min = 255, max = 0;
+    for (const v of luma) { if (v < min) min = v; if (v > max) max = v; }
+    if (max - min < 40) return null; // 整片白或整片黑，沒得找
+
+    const comps = darkComponents(luma, w, h, otsuThreshold(luma));
+    const candidates = comps.filter((c) => {
+      const side = (c.w + c.h) / 2;
+      const squareness = Math.min(c.w, c.h) / Math.max(c.w, c.h);
+      const fill = c.n / (c.w * c.h);
+      return side >= moduleSize * 5 && side <= moduleSize * 9.5
+        && squareness >= 0.7 && fill >= 0.25 && fill <= 0.8;
+    });
+    if (candidates.length < 3) return null;
+    // 候選太多代表這區塊很雜（例如把文字也算進來），交給幾何條件去挑，
+    // 但要限制數量避免三重迴圈爆掉。
+    const limited = candidates.slice(0, 12);
+    const triple = pickFinderTriple(limited, moduleSize);
+    if (!triple) return null;
+    return {
+      tl: [triple.tl[0] + x0, triple.tl[1] + y0],
+      tr: [triple.tr[0] + x0, triple.tr[1] + y0],
+      bl: [triple.bl[0] + x0, triple.bl[1] + y0],
+    };
+  }
+
+  function bilinearLuma(imageData, fx, fy) {
+    const { width, height, data } = imageData;
+    const x0 = Math.floor(fx), y0 = Math.floor(fy);
+    const tx = fx - x0, ty = fy - y0;
+    const at = (x, y) => {
+      if (x < 0 || y < 0 || x >= width || y >= height) return 255;
+      const i = (y * width + x) * 4;
+      return data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+    };
+    return at(x0, y0) * (1 - tx) * (1 - ty) + at(x0 + 1, y0) * tx * (1 - ty)
+      + at(x0, y0 + 1) * (1 - tx) * ty + at(x0 + 1, y0 + 1) * tx * ty;
+  }
+
+  // 用三個定位圖案張出來的格線取樣。dx/dy/sx/sy 是微調用的，正常情況都是 0/0/1/1。
+  function sampleWithAnchors(imageData, anchors, dx, dy, sx, sy) {
+    const ex = [(anchors.tr[0] - anchors.tl[0]) / 14, (anchors.tr[1] - anchors.tl[1]) / 14];
+    const ey = [(anchors.bl[0] - anchors.tl[0]) / 14, (anchors.bl[1] - anchors.tl[1]) / 14];
+    // 定位圖案中心在模組座標 (3.5, 3.5)；格子 c 的中心是 c + 0.5。
+    const at = (u, v) => [
+      anchors.tl[0] + dx + (u - 3.5) * ex[0] * sx + (v - 3.5) * ey[0] * sy,
+      anchors.tl[1] + dy + (u - 3.5) * ex[1] * sx + (v - 3.5) * ey[1] * sy,
+    ];
+    const samples = [];
+    let min = 255, max = 0;
+    for (let row = 0; row < SIZE; row++) {
+      samples[row] = [];
+      for (let col = 0; col < SIZE; col++) {
+        let sum = 0, count = 0;
+        for (let jy = -1; jy <= 1; jy++) {
+          for (let jx = -1; jx <= 1; jx++) {
+            const [px, py] = at(col + 0.5 + jx * 0.25, row + 0.5 + jy * 0.25);
+            sum += bilinearLuma(imageData, px, py);
+            count++;
+          }
+        }
+        const value = sum / count;
+        samples[row][col] = value;
+        if (value < min) min = value;
+        if (value > max) max = value;
+      }
+    }
+    return { samples, min, max };
+  }
+
+  const REFINE_SHIFTS = [-0.5, 0, 0.5];
+  const REFINE_SCALES = [0.97, 1, 1.03];
+
+  function matchWithAnchors(imageData, anchors, entries) {
+    let best = bestMatch(sampleWithAnchors(imageData, anchors, 0, 0, 1, 1), entries);
+    // 定位圖案的形心本來就有一點偏差（二值化、模糊、形心不等於幾何中心）。
+    // 已經夠好就不要多花這 81 次取樣；不夠好才微調。
+    if (best && best.score <= 0.08) return best;
+    for (const dx of REFINE_SHIFTS) {
+      for (const dy of REFINE_SHIFTS) {
+        for (const sx of REFINE_SCALES) {
+          for (const sy of REFINE_SCALES) {
+            if (dx === 0 && dy === 0 && sx === 1 && sy === 1) continue;
+            const candidate = bestMatch(sampleWithAnchors(imageData, anchors, dx, dy, sx, sy), entries);
+            if (candidate && (!best || candidate.score < best.score)) best = candidate;
+          }
+        }
+      }
+    }
+    return best;
+  }
+
   function identify(imageData, area, entries) {
+    // 先找定位圖案。找得到就用它張出來的格線——偏移與壓扁都不必猜。
+    const anchors = locateFinders(imageData, area);
+    if (anchors) {
+      const located = matchWithAnchors(imageData, anchors, entries);
+      if (located && located.score <= 0.24) return located;
+    }
+
+    // 找不到（或找到了卻對不上）才退回原本的固定位置取樣。
     const direct = bestMatch(sampleAt(imageData, area, 0, 0), entries);
     if (direct && direct.score <= 0.24) return direct;
 
@@ -254,7 +479,7 @@
     return best && best.score <= 0.24 ? best : null;
   }
 
-  const api = { SIZE, QUIET, matrixForText, svgMarkup, identify };
+  const api = { SIZE, QUIET, matrixForText, svgMarkup, identify, locateFinders };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.BibleQrCode = api;
 })(typeof window !== 'undefined' ? window : globalThis);
