@@ -114,6 +114,24 @@ td.hn { color:var(--ink-soft); font-size:.86rem; }
 .rule-box h3 { font-size:1rem; color:var(--warn); }
 .rule-box p { font-size:.92rem; }
 
+
+ul.callouts { list-style:none; padding:0; margin:0; display:grid; gap:1px;
+               background:var(--rule); border:1px solid var(--rule);
+               border-radius:4px; overflow:hidden; }
+ul.callouts li { background:var(--surface); display:grid; gap:4px 12px; padding:11px 14px;
+                  grid-template-columns:auto 1fr; align-items:baseline; }
+.cnum { grid-row:1/3; align-self:start; width:22px; height:22px; border-radius:50%;
+         background:var(--accent); color:#fff; font-family:var(--mono); font-size:.76rem;
+         font-weight:600; display:grid; place-items:center; }
+.cwhere { font-weight:700; }
+.cspec { margin-left:8px; }
+.cdesc { grid-column:2; font-size:.88rem; color:var(--ink-soft); line-height:1.6; }
+figure { margin:0; display:grid; gap:10px; }
+figure svg { width:100%; height:auto; max-height:520px; }
+figcaption { font-size:.84rem; color:var(--ink-soft); line-height:1.6; }
+.figrow { display:grid; gap:20px; }
+@media (min-width:760px) { .figrow { grid-template-columns:1fr 1fr; align-items:start; } }
+
 .tick { display:inline-flex; cursor:pointer; }
 .tick input { position:absolute; opacity:0; width:0; height:0; }
 .tick span { width:19px; height:19px; border:1.5px solid var(--rule); border-radius:3px;
@@ -218,6 +236,134 @@ footer { margin-top:52px; padding-top:16px; border-top:1px solid var(--rule);
     <tbody><tr><td><code>M4×25 內六角</code></td><td class="q">2</td><td>底座夾緊、套環夾緊</td><td class="hn">壓進旋鈕，自攻進塑膠</td></tr><tr><td><code>M4×20 內六角</code></td><td class="q">4</td><td>立柱接頭</td><td class="hn">每個接頭兩顆：下管一顆、上管一顆</td></tr><tr><td><code>M4 螺帽</code></td><td class="q">4</td><td>埋在接頭裡</td><td class="hn">壓入式，插進立柱後就掉不出來</td></tr><tr><td><code>M4×30 內六角</code></td><td class="q">2</td><td>托架 ↔ 臂</td><td class="hn">用六角扳手，設定一次就不動</td></tr><tr><td><code>M4×12–16</code></td><td class="q">4</td><td>鎖到你的 A4 底座</td><td class="hn">長度看底座多厚；不鎖也可以</td></tr><tr><td><code>魔鬼氈帶 20 cm</code></td><td class="q">1</td><td>跨過攝影機背面</td><td class="hn">反覆拆裝用這個，不要用膠</td></tr><tr><td><code>泡棉雙面膠</code></td><td class="q">少許</td><td>環內壁墊片</td><td class="hn">只吃間隙止晃，不承重</td></tr></tbody>
   </table></div>
   <p class="tools">夾緊處是 M4 直接自攻進塑膠，咬合 14–15 mm，不用螺帽。少三顆零件，組裝時也不會有東西掉出來滾到地上。</p>
+</section>
+
+<section>
+  <div class="sec-h"><span class="k">對照</span><h2>五金去哪裡</h2></div>
+  <div class="figrow">
+    <figure>
+      <div class="plate"><svg viewBox="0 0 440 620" role="img"
+  aria-label="支架側視圖，標出六處五金位置：底座夾緊、兩個立柱接頭、套環夾緊、托架鎖點、底板鎖孔">
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+    <line x1="24" y1="560" x2="416" y2="560" stroke-width="2.6"/>
+    <line x1="44" y1="557" x2="228" y2="557" stroke-width="6" stroke-opacity=".22"/>
+    <path d="M244 560 v-10 h172 v10"/>
+    <path d="M332 550 v-18 h84 v18"/>
+    <path d="M282 550 v-52 h40 v52"/>
+    <path d="M290 498 v-398 M314 498 v-398"/>
+    <path d="M290 380 h24 M290 230 h24" stroke-dasharray="3 3"/>
+    <rect x="276" y="150" width="52" height="46" rx="3"/>
+    <path d="M276 162 h-116 v24 h116"/>
+    <path d="M160 158 v96 h-14 v-96"/>
+    <rect x="110" y="240" width="86" height="17" rx="8"/>
+  </g>
+  <rect x="118" y="243" width="70" height="11" rx="5" fill="none"
+        stroke="currentColor" stroke-width="1.2" stroke-dasharray="3 2" opacity=".6"/>
+  <text x="153" y="278" fill="currentColor" font-size="11" text-anchor="middle" opacity=".7">托架＋C270</text>
+  <text x="70" y="551" fill="currentColor" font-size="11" opacity=".7">A4 塗色紙</text>
+  <g stroke="var(--accent)" stroke-width="1.4">
+    <line x1="264" y1="506" x2="284" y2="516"/>
+    <line x1="354" y1="382" x2="318" y2="388"/>
+    <line x1="354" y1="232" x2="318" y2="238"/>
+    <line x1="354" y1="172" x2="332" y2="172"/>
+    <line x1="118" y1="186" x2="144" y2="192"/>
+    <line x1="256" y1="592" x2="268" y2="562"/>
+  </g>
+  <g fill="var(--accent)" stroke="none">
+    <circle cx="252" cy="500" r="12"/><circle cx="368" cy="380" r="12"/>
+    <circle cx="368" cy="230" r="12"/><circle cx="368" cy="170" r="12"/>
+    <circle cx="106" cy="184" r="12"/><circle cx="250" cy="600" r="12"/>
+  </g>
+  <g fill="#fff" font-size="13" font-weight="600" text-anchor="middle">
+    <text x="252" y="505">1</text><text x="368" y="385">2</text>
+    <text x="368" y="235">3</text><text x="368" y="175">4</text>
+    <text x="106" y="189">5</text><text x="250" y="605">6</text>
+  </g>
+</svg></div>
+      <figcaption>六處鎖點的位置。編號對應下表。</figcaption>
+    </figure>
+    <figure>
+      <div class="plate"><svg viewBox="0 0 470 330" role="img"
+  aria-label="立柱接頭剖面：接頭兩端各埋一顆螺帽，上下兩節管子各鎖一顆螺絲進去">
+  <g fill="none" stroke="currentColor" stroke-width="1.6">
+    <path d="M150 330 v-140 M164 330 v-140 M236 330 v-140 M250 330 v-140"/>
+    <path d="M150 0 v178 M164 0 v178 M236 0 v178 M250 0 v178"/>
+  </g>
+  <g fill="none" stroke="var(--accent)" stroke-width="1.8">
+    <path d="M164 270 v-210 h72 v210 z"/>
+    <path d="M156 178 h88 v12 h-88 z"/>
+  </g>
+  <g fill="var(--accent)" fill-opacity=".18" stroke="var(--accent)" stroke-width="1.4">
+    <path d="M218 226 h18 v20 h-18 z"/>
+    <path d="M218 82 h18 v20 h-18 z"/>
+  </g>
+  <defs>
+    <marker id="sa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/>
+    </marker>
+  </defs>
+  <g stroke="var(--accent)" stroke-width="2.4" marker-end="url(#sa)">
+    <line x1="330" y1="236" x2="224" y2="236"/>
+    <line x1="330" y1="92"  x2="224" y2="92"/>
+  </g>
+  <g fill="currentColor" font-size="12">
+    <text x="96" y="60" text-anchor="middle">上管</text>
+    <text x="96" y="300" text-anchor="middle">下管</text>
+    <text x="338" y="88">M4×20 ＋ 旋鈕</text>
+    <text x="338" y="232">M4×20 ＋ 旋鈕</text>
+    <text x="338" y="106" opacity=".7" font-size="11">鎖進上端螺帽</text>
+    <text x="338" y="250" opacity=".7" font-size="11">鎖進下端螺帽</text>
+    <text x="20" y="180" font-size="11" opacity=".8">凸緣＝插到底的止點</text>
+    <text x="20" y="196" font-size="11" opacity=".8">（兩節管子在這裡對接）</text>
+  </g>
+  <line x1="132" y1="184" x2="146" y2="184" stroke="currentColor" stroke-width="1.2" opacity=".6"/>
+  <text x="200" y="20" fill="var(--accent)" font-size="12" text-anchor="middle">接頭（藏在管子裡）</text>
+  <line x1="200" y1="26" x2="200" y2="58" stroke="var(--accent)" stroke-width="1.2"/>
+</svg></div>
+      <figcaption>立柱接頭剖面。<b>每個接頭要兩顆螺絲、兩顆螺帽</b> —— 上下管各鎖一顆。
+      只鎖一邊的話，另一節管子可以在接頭上自由轉動，等於沒接。</figcaption>
+    </figure>
+  </div>
+  <ul class="callouts" style="margin-top:18px"><li>
+  <span class="cnum">1</span>
+  <span class="cwhere">底座夾緊</span>
+  <code class="cspec">M4×25 ＋ 旋鈕 ×1</code>
+  <span class="cdesc">底座插座<b>側面</b>那塊方形凸起上的孔。鎖緊時會把立柱頂到對面兩個內角。</span>
+</li><li>
+  <span class="cnum">2</span>
+  <span class="cwhere">立柱接頭 A</span>
+  <code class="cspec">M4×20 ＋ 旋鈕 ×2</code>
+  <span class="cdesc">下面那個接縫。管壁上離管端 20 mm 各一個孔，<b>上下都要鎖</b>。</span>
+</li><li>
+  <span class="cnum">3</span>
+  <span class="cwhere">立柱接頭 B</span>
+  <code class="cspec">M4×20 ＋ 旋鈕 ×2</code>
+  <span class="cdesc">上面那個接縫。同上。</span>
+</li><li>
+  <span class="cnum">4</span>
+  <span class="cwhere">套環夾緊</span>
+  <code class="cspec">M4×25 ＋ 旋鈕 ×1</code>
+  <span class="cdesc">套環<b>後方</b>（背對紙的那一面）凸起上的孔。調高度時鬆這一顆。</span>
+</li><li>
+  <span class="cnum">5</span>
+  <span class="cwhere">托架 ↔ 臂</span>
+  <code class="cspec">M4×30 ×2</code>
+  <span class="cdesc">托架立板上一個圓孔、一道弧槽。<b>用六角扳手，不配旋鈕</b> —— 調完水平就不再動。</span>
+</li><li>
+  <span class="cnum">6</span>
+  <span class="cwhere">鎖到你的底座</span>
+  <code class="cspec">M4×12–16 ×4</code>
+  <span class="cdesc">底板四角，沉頭從<b>底面</b>沉下去。不鎖也可以，配重槽放東西就夠穩。</span>
+</li></ul>
+  <p class="tools" style="display:block; margin-top:12px">
+    <b>怎麼分辨螺絲：</b>內六角圓柱頭的長度是從<b>頭部下方</b>量到尖端。
+    20 / 25 / 30 差 5 mm，三種並排一比就分得出來；最短那批（12–16）是鎖你自己底座用的。
+  </p>
+  <p class="tools" style="display:block; margin-top:8px">
+    <b>立柱上有 6 個孔，但只鎖 4 顆。</b>三根管子每根兩端各一個孔，用到的是中間四個 ——
+    最底下那個在底座插座裡（底座有自己的夾緊螺絲），最頂上那個在立柱頂端，都空著。
+    這樣三根管子可以任意對調，不用分正反。
+  </p>
 </section>
 
 <section>
