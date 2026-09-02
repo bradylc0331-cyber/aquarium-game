@@ -1,5 +1,10 @@
-// 每張 A4 塗色紙四角黑色方塊偵測：只在畫面四個象限的搜尋窗內找最大的深色連通區塊，
-// 求其重心當作角點座標。只在「校正」這個動作按下時跑一次，不是每幀都跑，
+// 每張 A4 塗色紙四角黑色方塊偵測：在畫面四個象限的搜尋窗內找**最靠角落**的深色
+// 連通區塊，求其重心當作角點座標。
+//
+// 為什麼是「最靠角落」而不是「最大」：角標是印在紙的四個角上的，位置固定；
+// 但塗得濃的作品（2026-09-02 實機的大衛：紫上衣、深綠裙）會在搜尋窗裡留下
+// 比 10mm 角標大十幾倍的色塊。挑最大的就會挑到衣服——那次右下角被判在畫面
+// 正中央 (367, 298)，拉正後整張圖扭曲。淺色鉛筆稿碰不到這個問題，濃塗色必踩。只在「校正」這個動作按下時跑一次，不是每幀都跑，
 // 自動對位時會先把攝影畫面縮小並限速執行，因此不需要 OpenCV。
 (function (root) {
   const CORNERS = ['tl', 'tr', 'br', 'bl'];
@@ -8,8 +13,9 @@
     return 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
   }
 
-  // 在 [x0,x1) x [y0,y1) 窗內找最大的深色連通區塊，回傳其重心（畫面座標）或 null
-  function findDarkBlobCentroid(imageData, x0, y0, x1, y1, threshold) {
+  // 在 [x0,x1) x [y0,y1) 窗內找深色連通區塊，回傳最靠近 corner 的那塊的重心。
+  // corner 省略時退回舊行為（挑最大的），方便單獨測試這支函式。
+  function findDarkBlobCentroid(imageData, x0, y0, x1, y1, threshold, corner) {
     const { width, data } = imageData;
     const w = x1 - x0, h = y1 - y0;
     const visited = new Uint8Array(w * h);
@@ -53,8 +59,15 @@
         const notSquareish = aspect < 0.4 || aspect > 2.5;
         const notSolid = fillRatio < 0.5; // 方塊應該填得很實心，排除細長陰影/邊線
         if (tooSmall || tooBig || notSquareish || notSolid) continue;
-        if (!best || count > best.count) {
-          best = { count, cx: sumX / count, cy: sumY / count };
+        const centroidX = sumX / count, centroidY = sumY / count;
+        if (!corner) {
+          if (!best || count > best.count) best = { count, cx: centroidX, cy: centroidY };
+          continue;
+        }
+        // 比的是「離角落多遠」。距離一樣時（幾乎不會發生）挑大的，比較像實心方塊。
+        const distance = Math.hypot(centroidX - corner[0], centroidY - corner[1]);
+        if (!best || distance < best.distance || (distance === best.distance && count > best.count)) {
+          best = { count, distance, cx: centroidX, cy: centroidY };
         }
       }
     }
@@ -75,11 +88,18 @@
       br: [width - ww, height - wh, width, height],
       bl: [0, height - wh, ww, height],
     };
+    // 每個搜尋窗「靠外」的那個角，就是要比距離的基準點
+    const anchors = {
+      tl: [0, 0],
+      tr: [width, 0],
+      br: [width, height],
+      bl: [0, height],
+    };
 
     const result = {};
     for (const key of CORNERS) {
       const [x0, y0, x1, y1] = windows[key];
-      const centroid = findDarkBlobCentroid(imageData, x0, y0, x1, y1, threshold);
+      const centroid = findDarkBlobCentroid(imageData, x0, y0, x1, y1, threshold, anchors[key]);
       if (!centroid) return null;
       result[key] = centroid;
     }
