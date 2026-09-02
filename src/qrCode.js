@@ -164,35 +164,92 @@
     return count ? sum / count : 255;
   }
 
-  function identify(imageData, area, entries) {
+  // 這個解碼器是「照固定位置取樣」——不找定位圖案，直接假設 QR 就在 area 裡。
+  // 好處是快又穩定；代價是它對**取樣格線的位置**極度敏感。
+  //
+  // 實測（720p、輕微模糊與雜訊、紙佔畫面寬 80%，四角改用帶誤差的座標）：
+  //
+  //   角點誤差 ±0px  成功 28/28（最差 score 0.025）
+  //   角點誤差 ±1px  成功 28/28（最差 score 0.218 ← 已經貼著 0.24 門檻）
+  //   角點誤差 ±2px  成功 22/28
+  //   角點誤差 ±3px  成功  8/28
+  //   角點誤差 ±4px  成功  4/28
+  //
+  // 也就是相機畫面裡的角點只要偏 2px，QR 就讀不到了。角點是黑方塊的 flood-fill
+  // 形心，現場的陰影、反光、紙沒完全攤平都很容易造成 2px 的偏移——這個餘裕
+  // 在真實硬體上是不夠的（校正後每個模組只有 2.41px，2px 相機誤差約等於
+  // 0.6 個模組，整張取樣格線就錯位了）。
+  //
+  // 所以：標稱位置先試一次（快，正常情況就在這裡結束）；讀不到才在附近搜尋
+  // 幾個次像素偏移，把餘裕買回來。只有失敗時才付這個成本。
+  const SEARCH_OFFSETS = [0, 0.6, -0.6, 1.2, -1.2, 1.8, -1.8, 2.4, -2.4, 3.0, -3.0];
+
+  function sampleAt(imageData, area, offsetX, offsetY) {
     const total = SIZE + QUIET * 2;
     const moduleSize = area.size / total;
+    const radius = Math.max(0, Math.floor(moduleSize * 0.18));
     const samples = [];
     let min = 255, max = 0;
     for (let row = 0; row < SIZE; row++) {
       samples[row] = [];
       for (let col = 0; col < SIZE; col++) {
-        const x = Math.round(area.x + (col + QUIET + 0.5) * moduleSize);
-        const y = Math.round(area.y + (row + QUIET + 0.5) * moduleSize);
-        const luma = luminanceAt(imageData, x, y, Math.max(0, Math.floor(moduleSize * 0.18)));
+        const x = Math.round(area.x + offsetX + (col + QUIET + 0.5) * moduleSize);
+        const y = Math.round(area.y + offsetY + (row + QUIET + 0.5) * moduleSize);
+        const luma = luminanceAt(imageData, x, y, radius);
         samples[row][col] = luma;
-        min = Math.min(min, luma);
-        max = Math.max(max, luma);
+        if (luma < min) min = luma;
+        if (luma > max) max = luma;
       }
     }
-    if (max - min < 70) return null;
-    const threshold = (min + max) / 2;
+    return { samples, min, max };
+  }
+
+  // 七個人物的樣板是固定的，但搜尋會把 bestMatch 叫上百次。
+  // 不快取的話 matrixForText（含 Reed-Solomon）會被重算幾百遍，
+  // 最壞情況實測 22.8ms → 快取後 4.3ms。
+  const matrixCache = new Map();
+  function cachedMatrix(text) {
+    let matrix = matrixCache.get(text);
+    if (!matrix) {
+      matrix = matrixForText(text);
+      matrixCache.set(text, matrix);
+    }
+    return matrix;
+  }
+
+  function bestMatch(sampled, entries) {
+    if (sampled.max - sampled.min < 70) return null;
+    const threshold = (sampled.min + sampled.max) / 2;
     let best = null;
     for (const entry of entries) {
-      const expected = matrixForText(entry.text);
+      const expected = cachedMatrix(entry.text);
       let mismatch = 0;
       for (let row = 0; row < SIZE; row++) {
         for (let col = 0; col < SIZE; col++) {
-          if ((samples[row][col] < threshold) !== expected[row][col]) mismatch++;
+          if ((sampled.samples[row][col] < threshold) !== expected[row][col]) mismatch++;
         }
       }
       const score = mismatch / (SIZE * SIZE);
       if (!best || score < best.score) best = { id: entry.id, text: entry.text, score };
+    }
+    return best;
+  }
+
+  function identify(imageData, area, entries) {
+    const direct = bestMatch(sampleAt(imageData, area, 0, 0), entries);
+    if (direct && direct.score <= 0.24) return direct;
+
+    // 標稱位置讀不到才搜尋。回傳分數最好的那個偏移。
+    let best = direct;
+    for (const offsetY of SEARCH_OFFSETS) {
+      for (const offsetX of SEARCH_OFFSETS) {
+        if (offsetX === 0 && offsetY === 0) continue;
+        const candidate = bestMatch(sampleAt(imageData, area, offsetX, offsetY), entries);
+        if (candidate && (!best || candidate.score < best.score)) {
+          best = candidate;
+          if (best.score === 0) return best; // 完全吻合，不必再找
+        }
+      }
     }
     return best && best.score <= 0.24 ? best : null;
   }
