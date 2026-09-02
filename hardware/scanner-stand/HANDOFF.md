@@ -158,3 +158,66 @@ C270 標的 55° 是**對角**視角，16:9 換算水平只有 48.8°、垂直 2
 - **托架環故意做鬆 1.5 mm**，犧牲手感換「`cam_h` 猜 31 或 33 都裝得上」。
 - **`stl/` 是 ASCII 格式**，git diff 有 86,000 行。改成 binary STL 會小很多，
   但會讓歷史比對變麻煩。目前保持 ASCII，需要的話再換。
+
+---
+
+## 9. 接手進度（2026-08-31～09-01，本機 Bambu Studio + 3DP-Brady）
+
+工作路徑更正：交接文件第 1 節寫的 `.worktrees/2-5d-character-motion` 是**錯的**，
+那個 worktree 掛的是 `feature/2-5d-character-motion`，跟 origin 歷史無關也沒有 `hardware/`。
+正確的是 `.worktrees/opus5-cloud-handoff`（分支 `2-5d-character-motion`）。
+
+### 已驗證（原本列為未做的事，現在做了）
+
+- **`cam_h = 32` 實測確認**。印出 `plate1-gauge`（PLA、18 分鐘），C270 放得進去、蠻剛好。
+  第 3 節的風險關掉了，參數不用改。
+- **3MF 經過 Bambu Studio 本人**。四塊板都開得起來，載入會跳
+  「The 3mf is not from Bambu Lab, load geometry data and color data only」，正常，按 OK 即可。
+  幾何、擺放、盤外零件都對得上 `check-3mf.py`。
+- **`check.sh` 在 macOS 上原本是紅的**，不是幾何問題：openscad 對 `gauge`（用到 `text()`）
+  會噴一條 Fontconfig 警告，被 `grep -icE 'warning|error'` 當成錯誤。已在第 1 節的
+  openscad 呼叫後面加 `| grep -viE 'fontconfig'`。修完全綠。
+
+### Bambu Studio 的 "floating cantilever" 警告是誤報
+
+切 `plate4` 會說 `object arm has floating cantilever`，切 `plate2` 會說 `object foot has ...`，
+建議加支撐。**不要照做**，理由：
+
+- 逐層剖面掃描（固定世界座標投影）結果：8 個零件裡只有 `arm` 有兩處疑似浮空島，
+  而那兩處面積剛好等於孔洞輪廓（35.45²、27.8×7.2），是把「孔」誤判成「獨立實體」的假陽性。
+  `foot` 完全乾淨，Bambu 卻照樣警告。
+- 逐面法向分析：朝下的水平面全部是「橋接」或「垂直印圓孔的頂端」，兩者都不需要支撐。
+- 實機證據：`plate1-gauge` 有一塊 156 mm² 的 90° 擋唇懸空，印出來乾淨；
+  `plate2` 的底座（含被點名的六角螺帽袋）印出來只有底面細絲，小尖刀刮掉即可，沒有塌陷。
+
+Bambu 抓的是「陡峭的朝下面」，不是真的懸空。這個設計本來就是照免支撐做的，維持不開支撐。
+
+### 列印紀錄（全部 PLA、0.20mm、4 圈牆、無支撐、Bambu A1 / 3DP-Brady）
+
+| 板 | 設定 | 結果 |
+| --- | --- | --- |
+| plate1-gauge | 填充 15% | 18 分鐘，Success，C270 實測合身 |
+| plate2-foot-knobs | 填充 15% | 3h47m / 165 g，Success（底面細絲，可刮除） |
+| plate3-masts | 填充 **25%**、brim **Outer brim only 5 mm** | 5h14m / 259 g |
+| plate4-arm-cradle-plugs | 填充 15% | 4h17m8s / 162.71 g，Success（2026-09-01 印完）|
+| plate5-rework（plug ×2、knob ×2、clipcomb ×1）| 填充 15%、brim 沿用 Auto | 2h33m / 82.07 g，2026-09-02 09:26 送印中 |
+
+### 給下一手的操作坑（Bambu Studio on macOS）
+
+- `open -a "BambuStudio" x.3mf` 的載入**延遲 40~50 秒**才跳「Load 3mf」對話框。
+  期間畫面停在首頁，看起來像沒載到 —— **不要再下第二次**，否則會載入兩份疊在同位置，
+  切片噴 `Conflicts of gcode paths ... (gauge <-> gauge)`。載完先開 Objects 清單數物件數量。
+- Bambu 的 macOS 檔案對話框按 Cmd+Shift+G 輸入含 `.worktrees` 這種隱藏目錄的路徑會卡在
+  Loading，Cancel/Esc 都無效只能 pkill。要開就先把 3mf 複製到非隱藏路徑。
+- 每塊板載入後都要手動把 Wall loops 從預設 2 改成 4（3mf 不帶列印參數，這是刻意的）。
+- 右側工具列第三個圖示是 **Arrange objects on current plate**，誤點會把 3mf 裡已驗過的擺放
+  整個重排（會跳「Arranging done.」）。Cmd+Z 可完整復原，復原後物件數會回到正確的數量。
+- Wall loops 欄位**點進去按 Cmd+A 選不到字**，直接打字會變成串接（2 打 4 → 24）。
+  要先 BackSpace 清乾淨再輸入。
+- `PRINT-HANDOFF.md` 說 plate5「約半小時多」是**錯的**，實際切出來 2h33m / 400 層 —— 
+  兩根接頭各 80 mm 高，本來就不可能半小時。那份估計是雲端 session 沒實際切過寫的。
+
+### 還沒做的
+
+第 7 節的 4、5、6 全部還沒做：組裝、實機驗收（457 mm 取景／QR 讀取／敲桌子測穩定度）、
+以及放 A4 的底座本體。

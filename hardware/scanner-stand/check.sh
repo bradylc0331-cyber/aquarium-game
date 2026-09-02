@@ -10,7 +10,8 @@ fail=0
 
 echo "== 1. 每個零件都要能乾淨算出來、是單一實體、塞得進 A1 =="
 for p in $PARTS; do
-  out=$(openscad -D "part=\"$p\"" -o "$TMP/$p.stl" camera-stand.scad 2>&1)
+  # macOS 的 openscad 會噴 Fontconfig 警告（gauge 用到 text()），與幾何無關，濾掉。
+  out=$(openscad -D "part=\"$p\"" -o "$TMP/$p.stl" camera-stand.scad 2>&1 | grep -viE 'fontconfig')
   w=$(echo "$out" | grep -icE 'warning|error')
   [ "$w" -gt 0 ] && { echo "  ** $p 有 $w 條警告/錯誤"; echo "$out" | grep -iE 'warning|error' | sed 's/^/     /'; fail=1; }
 done
