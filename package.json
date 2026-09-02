@@ -6,6 +6,6 @@
   "scripts": {
     "build": "node scripts/build-static.js",
     "test": "node --test test/*.test.js",
-    "serve": "python3 -m http.server 8933"
+    "serve": "node scripts/serve.js"
   }
 }

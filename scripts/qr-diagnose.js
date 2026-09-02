@@ -64,8 +64,20 @@ function inPageDiagnose() {
     out.corners = corners;
   }
 
-  // 2) QR：直接在「已經拉正的畫面」上比對，並掃描最佳偏移
-  const img = corrected.getContext('2d').getImageData(0, 0, corrected.width, corrected.height);
+  // 2) QR：自己把畫面拉正再比對。
+  //
+  // 為什麼不直接讀 correctedCanvas：那張是**預覽**，上面疊了人物 outline。
+  // 那個 overlay 在 WORK_AREA 之外（也就是 QR 這一區）是不透明的深藍，
+  // 會把對比整個壓掉——2026-09-02 就是因為讀它，兩次都量到「對比 60」
+  // 而去追照明，真正的畫面其實是 135。identify() 吃的是這裡算的這張。
+  if (!corners) return out;
+  const dst = ['tl', 'tr', 'br', 'bl'].map((k) => AquariumConstants.MARKER_CANONICAL[k]);
+  const srcPts = ['tl', 'tr', 'br', 'bl'].map((k) => corners[k]);
+  const invH = Homography.invertHomography(Homography.computeHomography(srcPts, dst));
+  const img = Homography.warpPerspectiveImageData(
+    frame, invH, AquariumConstants.CANVAS_W, AquariumConstants.CANVAS_H);
+  // 順便量一下預覽畫布，好讓「腳本量到的」跟「產品看到的」差別攤在報告上
+  const previewImg = corrected.getContext('2d').getImageData(0, 0, corrected.width, corrected.height);
   const AREA = AquariumConstants.QR_AREA;
   const S = BibleQrCode.SIZE;
   const Q = BibleQrCode.QUIET;
@@ -109,6 +121,20 @@ function inPageDiagnose() {
 
   const nominal = grab(0, 0);
   out.qr.contrast = nominal.max - nominal.min;
+  {
+    let pmin = 255, pmax = 0;
+    for (let row = 0; row < S; row++) {
+      for (let col = 0; col < S; col++) {
+        const x = Math.round(AREA.x + (col + Q + 0.5) * moduleSize);
+        const y = Math.round(AREA.y + (row + Q + 0.5) * moduleSize);
+        const i = (y * previewImg.width + x) * 4;
+        const v = previewImg.data[i] * 0.299 + previewImg.data[i + 1] * 0.587 + previewImg.data[i + 2] * 0.114;
+        if (v < pmin) pmin = v;
+        if (v > pmax) pmax = v;
+      }
+    }
+    out.qr.previewContrast = pmax - pmin;
+  }
   out.qr.scores = [];
   for (const species of Species.SPECIES) {
     let best = { score: 1, offsetX: 0, offsetY: 0 };
@@ -123,6 +149,10 @@ function inPageDiagnose() {
   out.qr.scores.sort((a, b) => a.score - b.score);
 
   const entries = Species.SPECIES.map((s) => ({ id: s.id, text: `BIBLE:${s.id.toUpperCase()}` }));
+  // 上面那組分數是「固定格線」的老方法，它本來就找不到偏掉的 QR。
+  // 真正在跑的是先找定位圖案的新路徑，把它的結果也一起印出來。
+  const anchors = BibleQrCode.locateFinders ? BibleQrCode.locateFinders(img, AREA) : null;
+  out.qr.anchors = anchors;
   out.qr.identify = BibleQrCode.identify(img, AREA, entries);
   // 有沒有偏移搜尋，決定了這支程式是修正前還是修正後的版本
   out.qr.hasOffsetSearch = /SEARCH_OFFSETS/.test(BibleQrCode.identify.toString())
@@ -187,6 +217,15 @@ function inPageDiagnose() {
     }));
 
     const pct = (v) => `${(v * 100).toFixed(1)}%`;
+    // 標稱的左上定位圖案中心（模組座標 3.5, 3.5），用來跟實測比。
+    // 直接讀專案常數，不要在這裡抄一份數字。
+    const { QR_AREA } = require('../src/constants.js');
+    const { SIZE: QR_SIZE, QUIET: QR_QUIET } = require('../src/qrCode.js');
+    const NOMINAL_MODULE = QR_AREA.size / (QR_SIZE + QR_QUIET * 2);
+    const AREA_TL = [
+      QR_AREA.x + (QR_QUIET + 3.5) * NOMINAL_MODULE,
+      QR_AREA.y + (QR_QUIET + 3.5) * NOMINAL_MODULE,
+    ];
     console.log('\n================ 診斷結果 ================\n');
     console.log('【狀態列】');
     console.log(`  自動模式開關：${statuses.autoOn ? '已開啟' : '✗ 沒開'}`);
@@ -209,14 +248,23 @@ function inPageDiagnose() {
       console.log(`  判定：${tooFull || tight ? '✗ 太滿，鏡頭要拉高' : '✓ 取景 OK'}`);
     }
 
+    if (!report.qr) {
+      console.log('\n四角偵測失敗，後面的 QR 數字沒有意義。先解決取景與照明。\n');
+      return;
+    }
     console.log('\n【② QR】');
     console.log(`  校正後每個模組 ${report.qr.moduleSize.toFixed(2)}px`);
     console.log(`  對比 ${report.qr.contrast.toFixed(0)}（<70 會直接放棄，代表反光／過曝／太暗）`);
+    console.log(`  （預覽畫布上的對比 ${report.qr.previewContrast.toFixed(0)}——那張疊了 outline，不是 identify() 吃的圖）`);
     console.log('  七位人物的最佳比對分數（越小越像，門檻 0.24）：');
     for (const s of report.qr.scores) {
       const mark = s.score <= 0.24 ? '✓' : ' ';
       console.log(`    ${mark} ${s.name.padEnd(4)} ${s.score.toFixed(3)}  @偏移 (${s.offsetX}, ${s.offsetY})`);
     }
+    console.log(`  定位圖案：${report.qr.anchors
+      ? `找到三個，左上在 (${report.qr.anchors.tl[0].toFixed(1)}, ${report.qr.anchors.tl[1].toFixed(1)})`
+        + `，標稱位置是 (${(AREA_TL[0]).toFixed(1)}, ${(AREA_TL[1]).toFixed(1)})`
+      : '找不到（會退回固定位置那條路）'}`);
     console.log(`  identify() 實際回傳：${report.qr.identify ? `${report.qr.identify.id} score ${report.qr.identify.score.toFixed(3)}` : 'null（讀不到）'}`);
 
     console.log('\n【判讀】');
@@ -224,8 +272,11 @@ function inPageDiagnose() {
     if (!report.cornersFound) {
       console.log('  → 四角偵測失敗，拉正的畫面是舊的或空的，QR 的數字都不算數。');
       console.log('     先確認：紙有沒有在鏡頭下、四個黑方塊有沒有被遮住、照明夠不夠。');
-    } else if (!statuses.autoOn) {
-      console.log('  → 「啟用自動拍攝與延遲登場」沒有勾。QR 讀得到也不會拍。');
+    } else if (report.qr.identify) {
+      // identify() 才是產品真正的答案。上面那七個分數是「固定格線」的老方法，
+      // 它本來就讀不到偏掉的 QR——拿它下結論會把成功講成失敗。
+      console.log(`  → QR 讀到了：${report.qr.identify.id} score ${report.qr.identify.score.toFixed(3)}（門檻 0.24）。`);
+      console.log('     上面那七個 0.3~0.4 的分數是舊的固定格線算法，留著當對照，不代表失敗。');
     } else if (report.qr.contrast < 70) {
       console.log('  → 對比不足。QR 上有反光或整片過曝／過暗。移開直射光源，或調偵測門檻。');
     } else if (best.score <= 0.24 && !report.qr.identify) {
@@ -238,6 +289,11 @@ function inPageDiagnose() {
     } else {
       console.log('  → 差很遠。優先確認：紙有沒有放反 180°（QR 要在畫面上方）、');
       console.log('     列印是不是 100% 實際大小、QR 有沒有被手或陰影蓋住。');
+    }
+    // 這條以前排在對比檢查前面，會把「QR 根本讀不到」蓋成「你沒打勾」，
+    // 害人去追錯方向。它只是附註，不是結論。
+    if (!statuses.autoOn) {
+      console.log('  （另外：「啟用自動拍攝與延遲登場」沒有勾，QR 讀得到也不會拍。）');
     }
     if (errors.length) console.log('\n【頁面 JS 錯誤】\n  ' + errors.slice(0, 3).join('\n  '));
     console.log('\n==========================================\n');
