@@ -267,7 +267,14 @@ openscad -D 'part="mast"' -D 'seg_len=180' -o stl/mast.stl camera-stand.scad
 python3 make-guide.py    # 去背、內嵌、輸出 assembly-guide.html
 ```
 
-## 九、自檢
+## 九、交接文件
+
+| 檔案 | 給誰 |
+| --- | --- |
+| `PRINT-HANDOFF.md` | 要在本機列印補印板、並量出 USB 線徑的 session |
+| `HANDOFF.md` | 要接手設計與實機驗收的 session |
+
+## 十、自檢
 
 ```bash
 sudo apt-get install openscad          # 只需要裝一次
