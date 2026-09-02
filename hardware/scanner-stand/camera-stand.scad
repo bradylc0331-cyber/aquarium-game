@@ -51,8 +51,10 @@ mast_wall   = 3;
 mast_fit    = 0.45;  // 套環／插座對立柱的滑配間隙
 seg_len     = 220;   // 主立柱節（A1 直立列印，離 256 上限留足餘裕）
 seg_short   = 120;   // 加長節
-plug_len    = 80;    // 接頭總長（上下各插入約 38）
+plug_len    = 80;    // 接頭總長
+plug_flange = 3;     // 接頭中央凸緣厚度（對接止點）
 plug_fit    = 0.35;
+joint_inset = 20;    // 立柱的接頭螺絲孔離管端多遠
 
 // --- 前伸臂 ----------------------------------------------------------------
 arm_w       = 12;    // 臂寬＝迎光面。做窄，在紙上只投一條淡線而不是一塊影子。
@@ -60,6 +62,8 @@ arm_h       = 30;    // 臂高＝剛性方向
 collar_h    = 45;
 collar_wall = 7;
 tab_h       = 46;    // 臂尖立板高度
+cable_dia   = 3.6;   // USB 線外徑。Logitech 沒有公開 C270 的線徑，量了就改這裡。
+                     // 不確定就先印 clipcomb 試扣梳（五種尺寸），挑扣得住的那一格。
 bolt_z1     = 14;    // 臂尖立板：樞軸孔高度
 bolt_dz     = 22;    // 樞軸孔到弧槽的距離
 tilt_deg    = 8;     // 傾角微調 ±8°
@@ -99,6 +103,13 @@ socket_in   = mast + mast_fit;
 socket_out  = socket_in + 2 * wall + 2;
 collar_hole = mast + mast_fit;
 collar_out  = collar_hole + 2 * collar_wall;
+
+// 接頭每一端實際插入多少（中央凸緣會吃掉 plug_flange/2）。
+// 螺帽袋的位置一定要從這個值推出來，不能從接頭端點量 —— 直接寫 joint_inset
+// 會讓螺帽偏 plug_flange/2，M4 螺絲在 7 mm 螺帽裡只有 1.5 mm 徑向餘裕，剛好會卡死。
+plug_ins     = (plug_len - plug_flange) / 2;
+plug_hole_lo = plug_ins - joint_inset;                 // 對到下管的孔
+plug_hole_hi = plug_ins + plug_flange + joint_inset;   // 對到上管的孔
 
 // 托架座標系：原點 = 鏡頭光軸，z = 0 是環的底面。
 // 機身正面落在 z = lip，背面在 z = lip + cam_thick。
@@ -193,7 +204,7 @@ module mast_segment(len) {
     difference() {
         linear_extrude(len) offset(r = 2) square(mast - 4, center = true);
         translate([0, 0, -1]) linear_extrude(len + 2) square(bore, center = true);
-        for (z = [20, len - 20])
+        for (z = [joint_inset, len - joint_inset])
             translate([0, 0, z]) rotate([0, 90, 0])
                 translate([0, 0, -mast]) cylinder(h = 2 * mast, d = m4_clear);
     }
@@ -210,10 +221,10 @@ module plug() {
     difference() {
         union() {
             linear_extrude(plug_len) square(s, center = true);
-            translate([0, 0, plug_len / 2 - 1.5])
-                linear_extrude(3) square(mast - 4, center = true);
+            translate([0, 0, (plug_len - plug_flange) / 2])
+                linear_extrude(plug_flange) square(mast - 4, center = true);
         }
-        for (z = [20, plug_len - 20]) {
+        for (z = [plug_hole_lo, plug_hole_hi]) {
             translate([0, 0, z]) rotate([0, 90, 0])
                 translate([0, 0, -s]) cylinder(h = 2 * s, d = m4_clear);
             translate([s / 2 - m4_nut_t, 0, z]) nut_pocket(m4_nut_t + 0.2);
@@ -260,12 +271,47 @@ module arm() {
     for (y = [-45, -90, -138]) translate([0, y, arm_h]) cable_clip();
 }
 
-// C 形扣線夾，開口朝上，線壓進去就卡住。無橋接。
-module cable_clip() {
+// 扣線夾：開口一定要「比線細」，線才會啪一下卡進去、而且拉不出來。
+//
+// 舊版是通道 6.5 mm、開口 4.4 mm，開口比 3–4 mm 的 USB 線還寬，
+// 而且開口從通道正中心往上切、上面完全沒有唇 —— 那不是卡扣，是一條開放的溝，
+// 什麼都扣不住。這一版所有尺寸都從 cable_dia 推出來。
+module cable_clip(dia = cable_dia) {
+    ch    = dia + 0.4;              // 通道：比線大一點點就好，大了就晃
+    mouth = dia * 0.70;             // 開口：一定要比線細，這是扣得住的唯一原因
+    base  = 1.8;                    // 通道下方底厚
+    lipt  = 1.2;                    // 上唇厚度。太厚撐不開，太薄會斷
+    hh    = base + ch + lipt;
+    ww    = ch + 4.0;
     difference() {
-        translate([-5, -4, 0]) cube([10, 8, 9]);
-        translate([0, 0, 5.5]) rotate([90, 0, 0]) cylinder(h = 12, d = 6.5, center = true);
-        translate([-2.2, -6, 5.5]) cube([4.4, 12, 5]);
+        translate([-ww / 2, -4, 0]) cube([ww, 8, hh]);
+        translate([0, 0, base + ch / 2]) rotate([90, 0, 0])
+            cylinder(h = 12, d = ch, center = true);
+        // 開口從通道中心「再往上一點」才開始，下面才留得住線
+        translate([-mouth / 2, -6, base + ch / 2 + ch * 0.12])
+            cube([mouth, 12, hh]);
+        // 頂部導入斜口，用拇指就推得進去
+        hull() {
+            translate([0, 0, hh - 0.01]) cube([ww + 1, 12, 0.02], center = true);
+            translate([0, 0, hh - 1.4])  cube([mouth, 12, 0.02], center = true);
+        }
+    }
+}
+
+// 試扣梳：五種線徑各一個夾子，10 分鐘印完。
+// 拿真的 USB 線一格一格試，挑「推得進去、但拉不出來」的那一格，
+// 把數字填回上面的 cable_dia 再重印臂。
+module clipcomb() {
+    d = [2.5, 3.0, 3.5, 4.0, 4.5];
+    pitch = 17;
+    n = len(d);
+    w = pitch * n;
+    translate([-w / 2, -6, 0]) cube([w, 20, 2]);
+    for (i = [0 : n - 1]) {
+        translate([-w / 2 + pitch * (i + 0.5), 0, 2]) cable_clip(d[i]);
+        translate([-w / 2 + pitch * (i + 0.5), 10, 2])
+            linear_extrude(0.7)
+                text(str(d[i]), size = 4.5, halign = "center", valign = "center");
     }
 }
 
@@ -384,4 +430,5 @@ else if (part == "arm")        arm();
 else if (part == "cradle")     cradle();
 else if (part == "knob")       knob();
 else if (part == "gauge")      gauge();
+else if (part == "clipcomb")   clipcomb();
 else                           assembly();
