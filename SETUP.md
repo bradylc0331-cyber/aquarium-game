@@ -25,11 +25,21 @@ npm run serve
 
 （已經 clone 過的話就 `cd aquarium-game && git pull && npm run serve`。）
 
-看到 `Serving HTTP on ... port 8933` 之後，用 **Chrome** 開
-<http://localhost:8933/>。終端機那個視窗整場都要開著，關掉網站就停了。
+看到 `聖經樂園開發伺服器：http://localhost:8933/control.html （快取已關閉）`
+之後，用 **Chrome** 開 <http://localhost:8933/>。終端機那個視窗整場都要開著，
+關掉網站就停了。
 
 不需要編譯，也不需要安裝任何套件——全部是靜態檔案，`npm run serve` 只是起一個
-本機小網頁伺服器。
+本機小網頁伺服器（`scripts/serve.js`，只用 Node 內建模組）。**那台電腦要裝過
+Node**，先用 `node -v` 確認有反應再開始。
+
+伺服器一律回 `Cache-Control: no-store`。這是刻意的：2026-09-02 修好程式之後
+實機測試「還是沒有」，查了才發現瀏覽器載的是快取裡的舊 JS，白繞一圈。
+
+**不需要部署到 Firebase 或任何雲端。** `http://localhost` 本來就算安全來源，
+攝影機權限不會被擋；而控制台與投影畫面必須在同一台電腦、同一個瀏覽器
+（靠 BroadcastChannel 溝通，不經過網路），放上雲端也不會變成兩台電腦可以分開用。
+全部跑本機的好處是**活動當天完全不依賴網路**。
 
 **不可以直接按兩下開 `display.html`。** 用 `file://` 開的話，畫面會是空的：
 瀏覽器會把從 `file://` 載入的圖片視為跨來源，畫到 canvas 之後就不准再讀回來，
